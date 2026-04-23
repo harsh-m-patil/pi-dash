@@ -13,7 +13,7 @@ import {
 } from "lucide-react"
 
 import { DailySpendChart, ProjectSpendChart } from "@/components/dashboard-charts"
-import { ingestAgentSessions } from "@/lib/pi-ingestion"
+import { ingestAgentSessions, type ProviderName } from "@/lib/pi-ingestion"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -113,8 +113,43 @@ function StatCard({ title, value, description, icon: Icon, emphasis }: StatCardP
   )
 }
 
-export default async function Page() {
-  const result = await ingestAgentSessions({ days: 7 })
+type DashboardProviderFilter = "all" | ProviderName
+
+type PageSearchParams = Record<string, string | string[] | undefined>
+
+type PageProps = {
+  searchParams?: Promise<PageSearchParams> | PageSearchParams
+}
+
+function firstQueryValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function normalizeProviderFilter(value: string | undefined): DashboardProviderFilter {
+  if (value === "pi" || value === "claude") return value
+  return "all"
+}
+
+function providerHref(providerFilter: DashboardProviderFilter): string {
+  return providerFilter === "all" ? "/" : `/?provider=${providerFilter}`
+}
+
+export default async function Page({ searchParams }: PageProps) {
+  const resolvedSearchParams = searchParams instanceof Promise ? await searchParams : searchParams ?? {}
+  const selectedProviderFilter = normalizeProviderFilter(firstQueryValue(resolvedSearchParams.provider))
+
+  const providers: ProviderName[] | undefined =
+    selectedProviderFilter === "all" ? undefined : [selectedProviderFilter]
+
+  const result = await ingestAgentSessions({ days: 7, providers })
+
+  const providerFilters: Array<{ value: DashboardProviderFilter; label: string }> = [
+    { value: "all", label: "All providers" },
+    { value: "pi", label: "Pi" },
+    { value: "claude", label: "Claude" },
+  ]
+
+  const providerLabel = selectedProviderFilter === "all" ? "All" : selectedProviderFilter
 
   const sessions = result.projects
     .flatMap((project) =>
@@ -245,8 +280,9 @@ export default async function Page() {
         <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">Pi Dashboard</Badge>
+              <Badge variant="outline">Agent Dashboard</Badge>
               <Badge variant="secondary">Default window: 7 days</Badge>
+              <Badge variant="outline">Provider: {providerLabel}</Badge>
               <Badge variant="outline">{windowLabel}</Badge>
             </div>
             <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
@@ -257,14 +293,26 @@ export default async function Page() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {Object.entries(providerSessionCounts).map(([provider, count]) => (
               <Badge key={provider} variant="outline" className="capitalize">
                 {provider}: {count}
               </Badge>
             ))}
+            <div className="flex flex-wrap items-center gap-1">
+              {providerFilters.map((providerFilter) => (
+                <Button
+                  key={providerFilter.value}
+                  variant={providerFilter.value === selectedProviderFilter ? "default" : "outline"}
+                  size="sm"
+                  asChild
+                >
+                  <Link href={providerHref(providerFilter.value)}>{providerFilter.label}</Link>
+                </Button>
+              ))}
+            </div>
             <Button variant="outline" asChild>
-              <Link href="/">
+              <Link href={providerHref(selectedProviderFilter)}>
                 <RefreshCcw className="size-4" /> Refresh
               </Link>
             </Button>
@@ -321,7 +369,7 @@ export default async function Page() {
                   <EmptyMedia variant="icon">
                     <CalendarDays className="size-4" />
                   </EmptyMedia>
-                  <EmptyTitle>No Pi sessions found for this window</EmptyTitle>
+                  <EmptyTitle>No sessions found for this provider/window</EmptyTitle>
                   <EmptyDescription>
                     Run some Pi sessions or widen the time window, then refresh this page.
                   </EmptyDescription>
