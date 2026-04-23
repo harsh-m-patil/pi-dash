@@ -13,6 +13,8 @@ type PiSessionHeader = {
 
 type ClaudeFirstEntry = {
   sessionId?: string
+  agentId?: string
+  isSidechain?: boolean
   cwd?: string
   timestamp?: string
 }
@@ -189,7 +191,12 @@ export async function discoverClaudeSessionSources(
       const firstEntry = await readFirstNonEmptyJson<ClaudeFirstEntry>(filePath)
       if (!firstEntry) continue
 
-      const sessionId = firstEntry.sessionId ?? basename(filePath, ".jsonl")
+      const parentSessionId = firstEntry.sessionId ?? basename(filePath, ".jsonl")
+      const agentId = firstEntry.agentId
+      const isSubagent = Boolean(agentId) || filePath.includes("/subagents/")
+      const sessionId = isSubagent && agentId
+        ? `${parentSessionId}:subagent:${agentId}`
+        : parentSessionId
       const cwd = firstEntry.cwd ?? directoryName
 
       sources.push({
@@ -200,6 +207,7 @@ export async function discoverClaudeSessionSources(
         projectId: cwd,
         projectLabel: basename(cwd),
         timestamp: firstEntry.timestamp,
+        ...(isSubagent ? { parentSessionId, agentId } : {}),
       })
     }
   }

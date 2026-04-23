@@ -66,6 +66,8 @@ type ClaudeEntry = {
   id?: string
   uuid?: string
   sessionId?: string
+  agentId?: string
+  isSidechain?: boolean
   cwd?: string
   timestamp?: string
   message?: {
@@ -373,6 +375,8 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
 
   let sessionId = source.sessionId || basename(source.path, ".jsonl")
   let cwd = source.cwd
+  let agentId: string | undefined = source.agentId
+  let parentSessionId: string | undefined = source.parentSessionId
 
   const turns: Turn[] = []
   let currentTurn: MutableTurn | null = null
@@ -386,8 +390,18 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
     const entry = parseClaudeJsonLine(line)
     if (!entry) continue
 
-    if (entry.sessionId) sessionId = entry.sessionId
+    // Only update sessionId from entry if this is not a subagent
+    // (subagents share the parent's sessionId, which would cause conflicts)
+    if (entry.sessionId && !agentId) sessionId = entry.sessionId
+    if (entry.agentId) agentId = entry.agentId
     if (entry.cwd) cwd = entry.cwd
+
+    // If we discover agentId from the entries and haven't composed the session ID yet,
+    // compose a unique session ID to avoid conflicts with the parent session.
+    if (agentId && !sessionId.includes(":subagent:")) {
+      parentSessionId = entry.sessionId ?? sessionId
+      sessionId = `${parentSessionId}:subagent:${agentId}`
+    }
 
     if (entry.type === "user") {
       const contentBlocks = entry.message?.content
@@ -502,5 +516,7 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
     endedAt,
     turns,
     observed,
+    ...(parentSessionId ? { parentSessionId } : {}),
+    ...(agentId ? { agentId } : {}),
   }
 }

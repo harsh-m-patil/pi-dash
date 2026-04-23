@@ -57,6 +57,8 @@ export type Session = {
   endedAt: string
   turns: Turn[]
   observed: ObservedUsage
+  parentSessionId?: string
+  agentId?: string
 }
 
 export type Project = {
@@ -74,6 +76,8 @@ export type SessionSource = {
   projectId: string
   projectLabel: string
   timestamp?: string
+  parentSessionId?: string
+  agentId?: string
 }
 
 export type IngestionConflict = {
