@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import { DailySpendChart, ProjectSpendChart } from "@/components/dashboard-charts"
+import { DailySpendChart, DailyTokenMixChart, ProjectSpendChart } from "@/components/dashboard-charts"
 import { ingestAgentSessions, type ProviderName } from "@/lib/pi-ingestion"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -165,6 +165,9 @@ export default async function Page({ searchParams }: PageProps) {
         tools: session.turns.reduce((sum, turn) => sum + turn.toolCalls.length, 0),
         cost: session.observed.cost.total,
         totalTokens: session.observed.totalTokens,
+        inputTokens: session.observed.input,
+        outputTokens: session.observed.output,
+        cacheTokens: session.observed.cacheRead + session.observed.cacheWrite,
       })),
     )
     .sort((a, b) => b.endedAt.localeCompare(a.endedAt))
@@ -237,7 +240,10 @@ export default async function Page({ searchParams }: PageProps) {
     .sort((a, b) => b.calls - a.calls)
     .slice(0, 12)
 
-  const dailyBuckets = new Map<string, number>()
+  const dailySpendBuckets = new Map<string, number>()
+  const dailyInputBuckets = new Map<string, number>()
+  const dailyOutputBuckets = new Map<string, number>()
+  const dailyCacheBuckets = new Map<string, number>()
   const dayKeys: string[] = []
   const now = new Date()
   for (let index = 6; index >= 0; index -= 1) {
@@ -245,25 +251,46 @@ export default async function Page({ searchParams }: PageProps) {
     date.setDate(now.getDate() - index)
     const key = isoDateKey(date)
     dayKeys.push(key)
-    dailyBuckets.set(key, 0)
+    dailySpendBuckets.set(key, 0)
+    dailyInputBuckets.set(key, 0)
+    dailyOutputBuckets.set(key, 0)
+    dailyCacheBuckets.set(key, 0)
   }
 
   for (const session of sessions) {
     const parsed = Date.parse(session.endedAt)
     if (!Number.isFinite(parsed)) continue
     const key = isoDateKey(new Date(parsed))
-    if (!dailyBuckets.has(key)) continue
-    dailyBuckets.set(key, (dailyBuckets.get(key) ?? 0) + session.cost)
+    if (!dailySpendBuckets.has(key)) continue
+
+    dailySpendBuckets.set(key, (dailySpendBuckets.get(key) ?? 0) + session.cost)
+    dailyInputBuckets.set(key, (dailyInputBuckets.get(key) ?? 0) + session.inputTokens)
+    dailyOutputBuckets.set(key, (dailyOutputBuckets.get(key) ?? 0) + session.outputTokens)
+    dailyCacheBuckets.set(key, (dailyCacheBuckets.get(key) ?? 0) + session.cacheTokens)
   }
 
-  const dailySeries = dayKeys.map((key) => {
-    const value = dailyBuckets.get(key) ?? 0
-    return {
-      key,
-      value,
-      label: formatDateOnly(new Date(`${key}T00:00:00.000Z`)),
-    }
-  })
+  const dailySeries = dayKeys.map((key) => ({
+    key,
+    value: dailySpendBuckets.get(key) ?? 0,
+    label: formatDateOnly(new Date(`${key}T00:00:00.000Z`)),
+  }))
+
+  const dailyTokenMixSeries = dayKeys.map((key) => ({
+    key,
+    input: dailyInputBuckets.get(key) ?? 0,
+    output: dailyOutputBuckets.get(key) ?? 0,
+    cache: dailyCacheBuckets.get(key) ?? 0,
+    label: formatDateOnly(new Date(`${key}T00:00:00.000Z`)),
+  }))
+
+  const tokenMixTotals = dailyTokenMixSeries.reduce(
+    (acc, day) => ({
+      input: acc.input + day.input,
+      output: acc.output + day.output,
+      cache: acc.cache + day.cache,
+    }),
+    { input: 0, output: 0, cache: 0 },
+  )
 
   const projectSpendSeries = projectRows.slice(0, 8).map((project) => ({
     project: project.label,
@@ -319,7 +346,7 @@ export default async function Page({ searchParams }: PageProps) {
           </div>
         </header>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             title="Observed cost"
             value={formatCurrency(result.summary.observed.cost.total)}
@@ -348,17 +375,6 @@ export default async function Page({ searchParams }: PageProps) {
             icon={Timer}
             emphasis={`${formatNumber(result.summary.observed.cacheRead)} cache-read tokens`}
           />
-          <StatCard
-            title="Conflicts"
-            value={formatNumber(result.conflicts.length)}
-            description="Duplicate session IDs with differing file hashes"
-            icon={AlertTriangle}
-            emphasis={
-              result.conflicts.length > 0
-                ? "Conflicted session IDs are excluded from analytics"
-                : "No conflicts detected"
-            }
-          />
         </section>
 
         {result.summary.sessions === 0 ? (
@@ -379,7 +395,7 @@ export default async function Page({ searchParams }: PageProps) {
           </Card>
         ) : (
           <>
-            <section className="grid gap-4 lg:grid-cols-2">
+            <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
               <Card className="border border-border/60">
                 <CardHeader>
                   <CardTitle className="text-base">Daily spend (last 7 days)</CardTitle>
@@ -387,6 +403,39 @@ export default async function Page({ searchParams }: PageProps) {
                 </CardHeader>
                 <CardContent>
                   <DailySpendChart data={dailySeries} />
+                </CardContent>
+              </Card>
+
+              <Card className="border border-border/60">
+                <CardHeader>
+                  <CardTitle className="text-base">Daily token mix (last 7 days)</CardTitle>
+                  <CardDescription>Stacked input vs output vs cache tokens by day</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
+                      <span className="size-2 rounded-full bg-blue-500" />
+                      <span className="text-muted-foreground">Input</span>
+                      <span className="font-mono text-blue-700 dark:text-blue-300">
+                        {formatNumber(tokenMixTotals.input)}
+                      </span>
+                    </div>
+                    <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
+                      <span className="size-2 rounded-full bg-violet-500" />
+                      <span className="text-muted-foreground">Output</span>
+                      <span className="font-mono text-violet-700 dark:text-violet-300">
+                        {formatNumber(tokenMixTotals.output)}
+                      </span>
+                    </div>
+                    <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
+                      <span className="size-2 rounded-full bg-emerald-500" />
+                      <span className="text-muted-foreground">Cache</span>
+                      <span className="font-mono text-emerald-700 dark:text-emerald-300">
+                        {formatNumber(tokenMixTotals.cache)}
+                      </span>
+                    </div>
+                  </div>
+                  <DailyTokenMixChart data={dailyTokenMixSeries} />
                 </CardContent>
               </Card>
 

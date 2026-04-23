@@ -9,9 +9,16 @@ import {
   type ChartConfig,
 } from "@workspace/ui/components/chart"
 
-type DailySpendPoint = {
+type DailyUsagePoint = {
   label: string
   value: number
+}
+
+type DailyTokenMixPoint = {
+  label: string
+  input: number
+  output: number
+  cache: number
 }
 
 type ProjectSpendPoint = {
@@ -27,8 +34,20 @@ const usd = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 })
 
+const integer = new Intl.NumberFormat("en-US")
+
 function formatCurrency(value: number): string {
   return usd.format(value || 0)
+}
+
+function formatTokens(value: number): string {
+  return integer.format(Math.round(value || 0))
+}
+
+function formatTokensTick(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+  return formatTokens(value)
 }
 
 const dailyChartConfig = {
@@ -37,6 +56,30 @@ const dailyChartConfig = {
     theme: {
       light: "hsl(221 83% 53%)",
       dark: "hsl(210 100% 68%)",
+    },
+  },
+} satisfies ChartConfig
+
+const dailyTokenMixChartConfig = {
+  input: {
+    label: "Input",
+    theme: {
+      light: "hsl(221 83% 53%)",
+      dark: "hsl(210 100% 68%)",
+    },
+  },
+  output: {
+    label: "Output",
+    theme: {
+      light: "hsl(265 89% 58%)",
+      dark: "hsl(262 100% 74%)",
+    },
+  },
+  cache: {
+    label: "Cache",
+    theme: {
+      light: "hsl(160 84% 39%)",
+      dark: "hsl(160 84% 56%)",
     },
   },
 } satisfies ChartConfig
@@ -51,7 +94,7 @@ const projectChartConfig = {
   },
 } satisfies ChartConfig
 
-export function DailySpendChart({ data }: { data: DailySpendPoint[] }) {
+export function DailySpendChart({ data }: { data: DailyUsagePoint[] }) {
   if (data.length === 0) return null
 
   return (
@@ -97,6 +140,84 @@ export function DailySpendChart({ data }: { data: DailySpendPoint[] }) {
           fill="url(#fill-daily-spend)"
           strokeWidth={3}
           strokeLinecap="round"
+        />
+      </AreaChart>
+    </ChartContainer>
+  )
+}
+
+export function DailyTokenMixChart({ data }: { data: DailyTokenMixPoint[] }) {
+  if (data.length === 0) return null
+
+  return (
+    <ChartContainer config={dailyTokenMixChartConfig} className="h-[240px] w-full aspect-auto">
+      <AreaChart data={data} margin={{ left: 8, right: 8, top: 8, bottom: 0 }}>
+        <defs>
+          <linearGradient id="fill-token-input" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="var(--color-input)" stopOpacity={0.45} />
+            <stop offset="95%" stopColor="var(--color-input)" stopOpacity={0.2} />
+          </linearGradient>
+          <linearGradient id="fill-token-output" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="var(--color-output)" stopOpacity={0.45} />
+            <stop offset="95%" stopColor="var(--color-output)" stopOpacity={0.2} />
+          </linearGradient>
+          <linearGradient id="fill-token-cache" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="var(--color-cache)" stopOpacity={0.45} />
+            <stop offset="95%" stopColor="var(--color-cache)" stopOpacity={0.2} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid vertical={false} />
+        <XAxis
+          dataKey="label"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+          minTickGap={24}
+        />
+        <YAxis
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(value: number) => formatTokensTick(value)}
+          width={56}
+        />
+        <ChartTooltip
+          cursor={false}
+          content={
+            <ChartTooltipContent
+              formatter={(value) => {
+                const numeric = typeof value === "number" ? value : Number(value)
+                return (
+                  <span className="font-mono">
+                    {formatTokens(Number.isFinite(numeric) ? numeric : 0)} tokens
+                  </span>
+                )
+              }}
+            />
+          }
+        />
+        <Area
+          type="monotone"
+          dataKey="input"
+          stackId="tokens"
+          stroke="var(--color-input)"
+          fill="url(#fill-token-input)"
+          strokeWidth={2}
+        />
+        <Area
+          type="monotone"
+          dataKey="output"
+          stackId="tokens"
+          stroke="var(--color-output)"
+          fill="url(#fill-token-output)"
+          strokeWidth={2}
+        />
+        <Area
+          type="monotone"
+          dataKey="cache"
+          stackId="tokens"
+          stroke="var(--color-cache)"
+          fill="url(#fill-token-cache)"
+          strokeWidth={2}
         />
       </AreaChart>
     </ChartContainer>
