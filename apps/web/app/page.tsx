@@ -1,8 +1,10 @@
 import type { ComponentType } from "react"
+import Image from "next/image"
 import Link from "next/link"
 import { BarChart3, DatabaseZap, FileJson } from "lucide-react"
 
 import { HeroAgentBadges } from "@/components/hero-agent-badges"
+import { GithubDark } from "@/components/svgs/githubDark"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -73,8 +75,26 @@ export default function Page() {
               <Link href="#overview">Explore scope</Link>
             </Button>
             <Button variant="outline" asChild>
-              <Link href="#overview">See how it works</Link>
+              <Link
+                href="https://github.com/harsh-m-patil/pi-dash"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <GithubDark className="size-4" aria-hidden="true" />
+                GitHub
+              </Link>
             </Button>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-border/60 bg-muted/20 p-2 md:p-3">
+            <Image
+              src="/dashboard.png"
+              alt="Dashboard preview"
+              width={1680}
+              height={988}
+              className="h-auto w-full rounded-md border border-border/50"
+              priority
+            />
           </div>
         </section>
 
