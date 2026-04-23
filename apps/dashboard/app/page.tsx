@@ -16,6 +16,7 @@ import { DailySpendChart, DailyTokenMixChart, ProjectSpendChart } from "@/compon
 import { ingestAgentSessions, type ProviderName } from "@/lib/pi-ingestion"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { Input } from "@workspace/ui/components/input"
 import {
   Card,
   CardAction,
@@ -121,6 +122,10 @@ type PageProps = {
   searchParams?: Promise<PageSearchParams> | PageSearchParams
 }
 
+const WINDOW_PRESETS = [7, 14, 30, 90] as const
+const DEFAULT_WINDOW_DAYS = WINDOW_PRESETS[0]
+const DATE_INPUT_REGEX = /^\d{4}-\d{2}-\d{2}$/
+
 function firstQueryValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value
 }
@@ -130,18 +135,129 @@ function normalizeProviderFilter(value: string | undefined): DashboardProviderFi
   return "all"
 }
 
-function providerHref(providerFilter: DashboardProviderFilter): string {
-  return providerFilter === "all" ? "/" : `/?provider=${providerFilter}`
+function normalizeWindowDays(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "", 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_WINDOW_DAYS
+  return Math.min(parsed, 365)
+}
+
+function parseDateInput(value: string | undefined, boundary: "start" | "end"): Date | undefined {
+  if (!value || !DATE_INPUT_REGEX.test(value)) return undefined
+
+  const timestamp = Date.parse(
+    boundary === "start" ? `${value}T00:00:00.000Z` : `${value}T23:59:59.999Z`,
+  )
+
+  if (!Number.isFinite(timestamp)) return undefined
+  return new Date(timestamp)
+}
+
+function dateInputValue(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+function addUtcDays(date: Date, days: number): Date {
+  const next = new Date(date)
+  next.setUTCDate(next.getUTCDate() + days)
+  return next
+}
+
+function buildQueryHref({
+  provider,
+  days,
+  from,
+  to,
+}: {
+  provider: DashboardProviderFilter
+  days?: number
+  from?: string
+  to?: string
+}): string {
+  const search = new URLSearchParams()
+
+  if (provider !== "all") search.set("provider", provider)
+
+  if (from && to) {
+    search.set("from", from)
+    search.set("to", to)
+  } else if (days && days !== DEFAULT_WINDOW_DAYS) {
+    search.set("days", String(days))
+  }
+
+  const query = search.toString()
+  return query ? `/?${query}` : "/"
+}
+
+function buildDayKeys({ days, from, to }: { days: number; from?: Date; to?: Date }): string[] {
+  const keys: string[] = []
+
+  if (from && to) {
+    let cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()))
+    const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()))
+
+    while (cursor.getTime() <= end.getTime()) {
+      keys.push(isoDateKey(cursor))
+      cursor = addUtcDays(cursor, 1)
+    }
+
+    return keys
+  }
+
+  const today = new Date()
+  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
+
+  for (let index = days - 1; index >= 0; index -= 1) {
+    keys.push(isoDateKey(addUtcDays(todayUtc, -index)))
+  }
+
+  return keys
 }
 
 export default async function Page({ searchParams }: PageProps) {
   const resolvedSearchParams = searchParams instanceof Promise ? await searchParams : searchParams ?? {}
   const selectedProviderFilter = normalizeProviderFilter(firstQueryValue(resolvedSearchParams.provider))
+  const fromQueryValue = firstQueryValue(resolvedSearchParams.from)
+  const toQueryValue = firstQueryValue(resolvedSearchParams.to)
+  const selectedDays = normalizeWindowDays(firstQueryValue(resolvedSearchParams.days))
+
+  let customFrom = parseDateInput(fromQueryValue, "start")
+  let customTo = parseDateInput(toQueryValue, "end")
+
+  if (customFrom && customTo && customFrom.getTime() > customTo.getTime()) {
+    const swappedFrom = customTo
+    const swappedTo = customFrom
+    customFrom = swappedFrom
+    customTo = swappedTo
+  }
+
+  const customWindow = customFrom && customTo ? { from: customFrom, to: customTo } : null
 
   const providers: ProviderName[] | undefined =
     selectedProviderFilter === "all" ? undefined : [selectedProviderFilter]
 
-  const result = await ingestAgentSessions({ days: 7, providers })
+  const result = await ingestAgentSessions(
+    customWindow
+      ? { from: customWindow.from, to: customWindow.to, providers }
+      : { days: selectedDays, providers },
+  )
+
+  const activeWindowQuery = customWindow
+    ? { from: dateInputValue(customWindow.from), to: dateInputValue(customWindow.to) }
+    : { days: selectedDays }
+
+  const providerHref = (providerFilter: DashboardProviderFilter): string =>
+    buildQueryHref({ provider: providerFilter, ...activeWindowQuery })
+
+  const presetHref = (days: number): string =>
+    buildQueryHref({ provider: selectedProviderFilter, days })
+
+  const resetWindowHref = buildQueryHref({
+    provider: selectedProviderFilter,
+    days: DEFAULT_WINDOW_DAYS,
+  })
+
+  const fromInput = customWindow ? dateInputValue(customWindow.from) : (fromQueryValue ?? "")
+  const toInput = customWindow ? dateInputValue(customWindow.to) : (toQueryValue ?? "")
 
   const providerFilters: Array<{ value: DashboardProviderFilter; label: string }> = [
     { value: "all", label: "All providers" },
@@ -244,13 +360,13 @@ export default async function Page({ searchParams }: PageProps) {
   const dailyInputBuckets = new Map<string, number>()
   const dailyOutputBuckets = new Map<string, number>()
   const dailyCacheBuckets = new Map<string, number>()
-  const dayKeys: string[] = []
-  const now = new Date()
-  for (let index = 6; index >= 0; index -= 1) {
-    const date = new Date(now)
-    date.setDate(now.getDate() - index)
-    const key = isoDateKey(date)
-    dayKeys.push(key)
+  const dayKeys = buildDayKeys({
+    days: selectedDays,
+    from: customWindow?.from,
+    to: customWindow?.to,
+  })
+
+  for (const key of dayKeys) {
     dailySpendBuckets.set(key, 0)
     dailyInputBuckets.set(key, 0)
     dailyOutputBuckets.set(key, 0)
@@ -299,6 +415,8 @@ export default async function Page({ searchParams }: PageProps) {
   }))
 
   const windowLabel = `${formatDateOnly(result.window.from)} → ${formatDateOnly(result.window.to)}`
+  const selectedWindowLabel = customWindow ? "Custom dates" : `Last ${selectedDays} days`
+  const chartWindowLabel = customWindow ? "custom range" : `last ${selectedDays} days`
   const overallCacheRate = cacheRate(result.summary.observed.input, result.summary.observed.cacheRead)
 
   return (
@@ -308,7 +426,7 @@ export default async function Page({ searchParams }: PageProps) {
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">Agent Dashboard</Badge>
-              <Badge variant="secondary">Default window: 7 days</Badge>
+              <Badge variant="secondary">Window: {selectedWindowLabel}</Badge>
               <Badge variant="outline">Provider: {providerLabel}</Badge>
               <Badge variant="outline">{windowLabel}</Badge>
             </div>
@@ -338,6 +456,40 @@ export default async function Page({ searchParams }: PageProps) {
                 </Button>
               ))}
             </div>
+            <div className="flex flex-wrap items-center gap-1">
+              {WINDOW_PRESETS.map((days) => (
+                <Button
+                  key={days}
+                  variant={!customWindow && selectedDays === days ? "default" : "outline"}
+                  size="sm"
+                  asChild
+                >
+                  <Link href={presetHref(days)}>Last {days}d</Link>
+                </Button>
+              ))}
+            </div>
+            <form
+              method="get"
+              className="flex flex-wrap items-end gap-2 rounded-lg border border-border/60 bg-muted/20 p-2"
+            >
+              {selectedProviderFilter !== "all" ? (
+                <input type="hidden" name="provider" value={selectedProviderFilter} />
+              ) : null}
+              <div className="space-y-1">
+                <p className="text-[11px] text-muted-foreground">From</p>
+                <Input type="date" name="from" defaultValue={fromInput} className="w-[150px]" required />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] text-muted-foreground">To</p>
+                <Input type="date" name="to" defaultValue={toInput} className="w-[150px]" required />
+              </div>
+              <Button type="submit" size="sm">
+                Apply dates
+              </Button>
+              <Button type="button" variant="ghost" size="sm" asChild>
+                <Link href={resetWindowHref}>Reset</Link>
+              </Button>
+            </form>
             <Button variant="outline" asChild>
               <Link href={providerHref(selectedProviderFilter)}>
                 <RefreshCcw className="size-4" /> Refresh
@@ -398,7 +550,7 @@ export default async function Page({ searchParams }: PageProps) {
             <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
               <Card className="border border-border/60">
                 <CardHeader>
-                  <CardTitle className="text-base">Daily spend (last 7 days)</CardTitle>
+                  <CardTitle className="text-base">Daily spend ({chartWindowLabel})</CardTitle>
                   <CardDescription>Observed session cost trend by day</CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -408,7 +560,7 @@ export default async function Page({ searchParams }: PageProps) {
 
               <Card className="border border-border/60">
                 <CardHeader>
-                  <CardTitle className="text-base">Daily token mix (last 7 days)</CardTitle>
+                  <CardTitle className="text-base">Daily token mix ({chartWindowLabel})</CardTitle>
                   <CardDescription>Stacked input vs output vs cache tokens by day</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
