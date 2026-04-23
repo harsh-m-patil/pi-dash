@@ -1,18 +1,37 @@
 import { basename } from "node:path"
 
-const TOOL_NAME_MAP: Record<string, string> = {
-  bash: "Bash",
-  read: "Read",
-  edit: "Edit",
-  write: "Write",
+/**
+ * Normalize a raw tool name into a canonical display form.
+ *
+ * Works dynamically — no hardcoded tool list required.
+ *
+ * Rules:
+ *  1. MCP tools ("mcp__<server>__<action>") → keep as-is (already namespaced)
+ *  2. Lowercase single-word names (Pi style: "bash") → Title-case → "Bash"
+ *  3. Already title-cased names (Claude style: "Bash", "WebFetch") → keep as-is
+ *  4. Everything else → return as-is
+ *
+ * This ensures Pi's "bash" and Claude's "Bash" collapse to the same key.
+ */
+export function normalizeToolName(rawToolName: string): string {
+  if (!rawToolName) return rawToolName
+
+  // MCP tools: preserve the fully-qualified name
+  if (rawToolName.startsWith("mcp__") || rawToolName.startsWith("mcp_")) {
+    return rawToolName
+  }
+
+  // If the name is entirely lowercase (Pi convention), title-case it
+  // so it groups with Claude's already-title-cased variant.
+  if (rawToolName === rawToolName.toLowerCase()) {
+    return rawToolName.charAt(0).toUpperCase() + rawToolName.slice(1)
+  }
+
+  return rawToolName
 }
 
 function stripQuotedStrings(command: string): string {
   return command.replace(/"[^"]*"|'[^']*'/g, (match) => " ".repeat(match.length))
-}
-
-export function normalizeToolName(rawToolName: string): string {
-  return TOOL_NAME_MAP[rawToolName] ?? rawToolName
 }
 
 export function extractBashCommands(command: string): string[] {

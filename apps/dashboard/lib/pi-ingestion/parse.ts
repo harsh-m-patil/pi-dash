@@ -369,6 +369,138 @@ export function parsePiSessionContent(source: SessionSource, content: string): S
   }
 }
 
+/**
+ * Claude logs multiple streaming entries per logical assistant message.
+ * All streaming entries share the same `message.id` but have different `uuid`s.
+ * Each streaming entry typically contains only one `tool_use` block (the latest
+ * tool being dispatched). The final entry for a message has a non-null
+ * `stop_reason` (e.g. "tool_use", "end_turn", "stop_sequence") and carries
+ * the real token usage.
+ *
+ * To get the complete picture we consolidate all entries sharing a `message.id`:
+ *   - Collect tool_use blocks from ALL streaming entries (deduped by block id)
+ *   - Use the FINAL entry's usage and stop_reason
+ *   - Emit one invocation per consolidated message
+ */
+
+type ConsolidatedClaudeMessage = {
+  /** Canonical invocation id (message.id) */
+  messageId: string
+  /** Timestamp of the first streaming entry (start of generation) */
+  firstTimestamp: string
+  /** Timestamp of the final streaming entry */
+  lastTimestamp: string
+  /** Model from the final entry */
+  model: string
+  /** stop_reason from the final entry (may still be undefined for incomplete messages) */
+  stopReason: string | undefined
+  /** Usage from the final entry (highest token counts) */
+  usage: ClaudeEntry["message"] & { usage: NonNullable<ClaudeEntry["message"]>["usage"] }
+  /** All unique tool_use blocks collected across streaming entries, in order */
+  toolBlocks: ClaudeContentBlock[]
+}
+
+function consolidateClaudeAssistantEntries(
+  entries: ClaudeEntry[],
+): ConsolidatedClaudeMessage[] {
+  // Ordered map: messageId -> accumulator
+  const byMessageId = new Map<
+    string,
+    {
+      firstTimestamp: string
+      lastTimestamp: string
+      model: string
+      stopReason: string | undefined
+      finalUsage: NonNullable<ClaudeEntry["message"]>["usage"]
+      toolBlockIds: Set<string>
+      toolBlocks: ClaudeContentBlock[]
+      rawFinalMessage: NonNullable<ClaudeEntry["message"]>
+    }
+  >()
+
+  let syntheticCounter = 0
+
+  for (const entry of entries) {
+    if (entry.type !== "assistant" || !entry.message?.usage || !entry.message.model) continue
+
+    const messageId =
+      entry.message.id ?? entry.uuid ?? entry.id ?? `__synthetic_${++syntheticCounter}`
+    const timestamp = entry.timestamp ?? ""
+
+    const existing = byMessageId.get(messageId)
+
+    // Extract tool_use blocks from this streaming entry
+    const contentBlocks = Array.isArray(entry.message.content) ? entry.message.content : []
+    const newToolBlocks = contentBlocks.filter(
+      (block) => block.type === "tool_use" && typeof block.name === "string",
+    )
+
+    if (!existing) {
+      const seenIds = new Set<string>()
+      const deduped: ClaudeContentBlock[] = []
+      for (const block of newToolBlocks) {
+        const blockId = block.id ?? ""
+        if (blockId && seenIds.has(blockId)) continue
+        if (blockId) seenIds.add(blockId)
+        deduped.push(block)
+      }
+
+      byMessageId.set(messageId, {
+        firstTimestamp: timestamp,
+        lastTimestamp: timestamp,
+        model: entry.message.model,
+        stopReason: entry.message.stop_reason ?? undefined,
+        finalUsage: entry.message.usage,
+        toolBlockIds: seenIds,
+        toolBlocks: deduped,
+        rawFinalMessage: entry.message,
+      })
+    } else {
+      // Update with latest timestamp, usage, stop_reason, model
+      existing.lastTimestamp = timestamp
+      existing.model = entry.message.model
+      existing.rawFinalMessage = entry.message
+
+      // Always prefer a non-null stop_reason from the latest entry
+      if (entry.message.stop_reason) {
+        existing.stopReason = entry.message.stop_reason
+      }
+
+      // Use the entry with the highest totalTokens as the authoritative usage
+      const existingTotal =
+        (existing.finalUsage?.input_tokens ?? 0) + (existing.finalUsage?.output_tokens ?? 0)
+      const newTotal =
+        (entry.message.usage?.input_tokens ?? 0) + (entry.message.usage?.output_tokens ?? 0)
+      if (newTotal >= existingTotal) {
+        existing.finalUsage = entry.message.usage
+      }
+
+      // Merge new tool blocks (dedup by block id)
+      for (const block of newToolBlocks) {
+        const blockId = block.id ?? ""
+        if (blockId && existing.toolBlockIds.has(blockId)) continue
+        if (blockId) existing.toolBlockIds.add(blockId)
+        existing.toolBlocks.push(block)
+      }
+    }
+  }
+
+  const consolidated: ConsolidatedClaudeMessage[] = []
+  for (const [messageId, data] of byMessageId) {
+    consolidated.push({
+      messageId,
+      firstTimestamp: data.firstTimestamp,
+      lastTimestamp: data.lastTimestamp,
+      model: data.model,
+      stopReason: data.stopReason,
+      usage: { ...data.rawFinalMessage, usage: data.finalUsage },
+      toolBlocks: data.toolBlocks,
+    })
+  }
+
+  return consolidated
+}
+
 export function parseClaudeSessionContent(source: SessionSource, content: string): Session | null {
   const lines = content.split("\n").filter((line) => line.trim().length > 0)
   if (lines.length === 0) return null
@@ -378,32 +510,89 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
   let agentId: string | undefined = source.agentId
   let parentSessionId: string | undefined = source.parentSessionId
 
-  const turns: Turn[] = []
-  let currentTurn: MutableTurn | null = null
-  let turnCount = 0
-  let pendingUserMessage = ""
+  // First pass: parse all entries, consolidate streamed assistant messages,
+  // and produce a flat ordered list of logical events.
+  type LogicalEvent =
+    | { kind: "user"; entry: ClaudeEntry }
+    | { kind: "assistant"; message: ConsolidatedClaudeMessage }
 
-  const seenInvocationIds = new Set<string>()
-  const toolCallsById = new Map<string, ParsedToolCall>()
-
+  const allParsedEntries: ClaudeEntry[] = []
   for (const line of lines) {
     const entry = parseClaudeJsonLine(line)
-    if (!entry) continue
+    if (entry) allParsedEntries.push(entry)
+  }
 
-    // Only update sessionId from entry if this is not a subagent
-    // (subagents share the parent's sessionId, which would cause conflicts)
+  // Build ordered logical events.
+  // We need to interleave consolidated assistant messages with user entries
+  // in their original order. Strategy:
+  //  1. Collect assistant entries per message.id, noting the index of the *first*
+  //     streaming entry for ordering purposes.
+  //  2. Walk the entries in order, emit user events immediately, emit
+  //     consolidated assistant events at the position of their first entry.
+
+  const assistantEntries: ClaudeEntry[] = []
+  const firstIndexByMessageId = new Map<string, number>()
+  let syntheticIdCounter = 0
+
+  for (let i = 0; i < allParsedEntries.length; i++) {
+    const entry = allParsedEntries[i]!
+
+    // Track session / agent metadata
     if (entry.sessionId && !agentId) sessionId = entry.sessionId
     if (entry.agentId) agentId = entry.agentId
     if (entry.cwd) cwd = entry.cwd
-
-    // If we discover agentId from the entries and haven't composed the session ID yet,
-    // compose a unique session ID to avoid conflicts with the parent session.
     if (agentId && !sessionId.includes(":subagent:")) {
       parentSessionId = entry.sessionId ?? sessionId
       sessionId = `${parentSessionId}:subagent:${agentId}`
     }
 
+    if (entry.type === "assistant" && entry.message?.usage && entry.message.model) {
+      const msgId =
+        entry.message.id ?? entry.uuid ?? entry.id ?? `__synthetic_${++syntheticIdCounter}`
+      if (!firstIndexByMessageId.has(msgId)) {
+        firstIndexByMessageId.set(msgId, i)
+      }
+      assistantEntries.push(entry)
+    }
+  }
+
+  const consolidated = consolidateClaudeAssistantEntries(assistantEntries)
+  const consolidatedByFirstIndex = new Map<number, ConsolidatedClaudeMessage>()
+  for (const msg of consolidated) {
+    const firstIdx = firstIndexByMessageId.get(msg.messageId)
+    if (firstIdx !== undefined) {
+      consolidatedByFirstIndex.set(firstIdx, msg)
+    }
+  }
+
+  const logicalEvents: LogicalEvent[] = []
+  const emittedAssistantIds = new Set<string>()
+
+  for (let i = 0; i < allParsedEntries.length; i++) {
+    const entry = allParsedEntries[i]!
+
     if (entry.type === "user") {
+      logicalEvents.push({ kind: "user", entry })
+      continue
+    }
+
+    const consolidatedMsg = consolidatedByFirstIndex.get(i)
+    if (consolidatedMsg && !emittedAssistantIds.has(consolidatedMsg.messageId)) {
+      emittedAssistantIds.add(consolidatedMsg.messageId)
+      logicalEvents.push({ kind: "assistant", message: consolidatedMsg })
+    }
+  }
+
+  // Second pass: walk logical events and build turns
+  const turns: Turn[] = []
+  let currentTurn: MutableTurn | null = null
+  let turnCount = 0
+  let pendingUserMessage = ""
+  const toolCallsById = new Map<string, ParsedToolCall>()
+
+  for (const event of logicalEvents) {
+    if (event.kind === "user") {
+      const entry = event.entry
       const contentBlocks = entry.message?.content
       const userText = extractClaudeUserMessageText(contentBlocks)
 
@@ -415,6 +604,7 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
         pendingUserMessage = userText
       }
 
+      // Process tool_result blocks in user messages
       if (Array.isArray(contentBlocks)) {
         for (const block of contentBlocks) {
           if (block.type !== "tool_result") continue
@@ -434,35 +624,25 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
       continue
     }
 
-    if (entry.type !== "assistant" || !entry.message?.usage || !entry.message.model) continue
+    // kind === "assistant" — consolidated message
+    const msg = event.message
 
     const usage = parseObservedUsageFromValues({
-      input: entry.message.usage.input_tokens,
-      output: entry.message.usage.output_tokens,
-      cacheRead: entry.message.usage.cache_read_input_tokens,
-      cacheWrite: entry.message.usage.cache_creation_input_tokens,
+      input: msg.usage.usage?.input_tokens,
+      output: msg.usage.usage?.output_tokens,
+      cacheRead: msg.usage.usage?.cache_read_input_tokens,
+      cacheWrite: msg.usage.usage?.cache_creation_input_tokens,
     })
     if (usage.totalTokens === 0) continue
 
     if (!currentTurn) {
       turnCount += 1
-      currentTurn = createTurn(sessionId, turnCount, entry.timestamp ?? "", pendingUserMessage)
+      currentTurn = createTurn(sessionId, turnCount, msg.firstTimestamp, pendingUserMessage)
     }
     pendingUserMessage = ""
 
-    const invocationId =
-      entry.message.id ?? entry.uuid ?? entry.id ?? `${currentTurn.id}:invocation:${currentTurn.invocations.length + 1}`
-
-    if (seenInvocationIds.has(invocationId)) continue
-    seenInvocationIds.add(invocationId)
-
-    const contentBlocks = Array.isArray(entry.message.content) ? entry.message.content : []
-    const toolBlocks = contentBlocks.filter(
-      (block) => block.type === "tool_use" && typeof block.name === "string",
-    )
-
     const toolCallIds: string[] = []
-    for (const block of toolBlocks) {
+    for (const block of msg.toolBlocks) {
       const toolCallId = block.id ?? `${currentTurn.id}:tool:${currentTurn.toolCalls.length + 1}`
       toolCallIds.push(toolCallId)
 
@@ -471,7 +651,7 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
         name: block.name!,
         normalizedName: normalizeToolName(block.name!),
         arguments: block.input ?? {},
-        startedAt: entry.timestamp ?? "",
+        startedAt: msg.firstTimestamp,
         outcome: "unknown",
       }
 
@@ -480,11 +660,11 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
     }
 
     const invocation: LlmInvocation = {
-      id: invocationId,
-      timestamp: entry.timestamp ?? "",
+      id: msg.messageId,
+      timestamp: msg.lastTimestamp,
       provider: "claude",
-      model: entry.message.model,
-      stopReason: entry.message.stop_reason,
+      model: msg.model,
+      stopReason: msg.stopReason,
       usage,
       toolCallIds,
     }
@@ -493,8 +673,8 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
     if (!currentTurn.startedAt) currentTurn.startedAt = invocation.timestamp
     currentTurn.endedAt = invocation.timestamp
 
-    if (entry.message.stop_reason === "stop" || entry.message.stop_reason === "end_turn") {
-      currentTurn = finalizeTurn(turns, currentTurn, entry.timestamp)
+    if (msg.stopReason === "stop" || msg.stopReason === "end_turn" || msg.stopReason === "stop_sequence") {
+      currentTurn = finalizeTurn(turns, currentTurn, msg.lastTimestamp)
     }
   }
 

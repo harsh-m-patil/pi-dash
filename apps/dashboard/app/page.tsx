@@ -13,10 +13,10 @@ import {
 } from "lucide-react"
 
 import { DailySpendChart, DailyTokenMixChart, ProjectSpendChart } from "@/components/dashboard-charts"
+import { DateRangeFilter } from "@/components/date-range-filter"
 import { ingestAgentSessions, type ProviderName } from "@/lib/pi-ingestion"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import {
   Card,
   CardAction,
@@ -248,14 +248,6 @@ export default async function Page({ searchParams }: PageProps) {
   const providerHref = (providerFilter: DashboardProviderFilter): string =>
     buildQueryHref({ provider: providerFilter, ...activeWindowQuery })
 
-  const presetHref = (days: number): string =>
-    buildQueryHref({ provider: selectedProviderFilter, days })
-
-  const resetWindowHref = buildQueryHref({
-    provider: selectedProviderFilter,
-    days: DEFAULT_WINDOW_DAYS,
-  })
-
   const fromInput = customWindow ? dateInputValue(customWindow.from) : (fromQueryValue ?? "")
   const toInput = customWindow ? dateInputValue(customWindow.to) : (toQueryValue ?? "")
 
@@ -354,7 +346,6 @@ export default async function Page({ searchParams }: PageProps) {
         stats.latencySamples > 0 ? Math.round(stats.latencyTotalMs / stats.latencySamples) : null,
     }))
     .sort((a, b) => b.calls - a.calls)
-    .slice(0, 12)
 
   const dailySpendBuckets = new Map<string, number>()
   const dailyInputBuckets = new Map<string, number>()
@@ -456,41 +447,14 @@ export default async function Page({ searchParams }: PageProps) {
                 </Button>
               ))}
             </div>
-            <div className="flex flex-wrap items-center gap-1">
-              {WINDOW_PRESETS.map((days) => (
-                <Button
-                  key={days}
-                  variant={!customWindow && selectedDays === days ? "default" : "outline"}
-                  size="sm"
-                  asChild
-                >
-                  <Link href={presetHref(days)}>Last {days}d</Link>
-                </Button>
-              ))}
-            </div>
-            <form
-              method="get"
-              className="flex flex-wrap items-end gap-2 rounded-lg border border-border/60 bg-muted/20 p-2"
-            >
-              {selectedProviderFilter !== "all" ? (
-                <input type="hidden" name="provider" value={selectedProviderFilter} />
-              ) : null}
-              <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">From</p>
-                <Input type="date" name="from" defaultValue={fromInput} className="w-[150px]" required />
-              </div>
-              <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">To</p>
-                <Input type="date" name="to" defaultValue={toInput} className="w-[150px]" required />
-              </div>
-              <Button type="submit" size="sm">
-                Apply dates
-              </Button>
-              <Button type="button" variant="ghost" size="sm" asChild>
-                <Link href={resetWindowHref}>Reset</Link>
-              </Button>
-            </form>
-            <Button variant="outline" asChild>
+            <DateRangeFilter
+              currentDays={selectedDays}
+              currentFrom={fromInput}
+              currentTo={toInput}
+              isCustom={!!customWindow}
+              provider={selectedProviderFilter}
+            />
+            <Button variant="outline" size="sm" asChild>
               <Link href={providerHref(selectedProviderFilter)}>
                 <RefreshCcw className="size-4" /> Refresh
               </Link>
@@ -655,10 +619,10 @@ export default async function Page({ searchParams }: PageProps) {
 
               <Card className="border border-border/60">
                 <CardHeader>
-                  <CardTitle className="text-base">Top tools</CardTitle>
-                  <CardDescription>Tool calls extracted from assistant content blocks</CardDescription>
+                  <CardTitle className="text-base">Tools ({topTools.length})</CardTitle>
+                  <CardDescription>All tool calls discovered from session logs</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-3">
+                <CardContent className="max-h-[600px] space-y-3 overflow-y-auto">
                   {topTools.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No tool calls recorded in this window.</p>
                   ) : (
