@@ -12,7 +12,8 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import { ingestPiSessions } from "@/lib/pi-ingestion"
+import { DailySpendChart, ProjectSpendChart } from "@/components/dashboard-charts"
+import { ingestAgentSessions } from "@/lib/pi-ingestion"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -30,7 +31,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@workspace/ui/components/empty"
-import { Progress } from "@workspace/ui/components/progress"
 import {
   Table,
   TableBody,
@@ -114,12 +114,13 @@ function StatCard({ title, value, description, icon: Icon, emphasis }: StatCardP
 }
 
 export default async function Page() {
-  const result = await ingestPiSessions({ days: 7 })
+  const result = await ingestAgentSessions({ days: 7 })
 
   const sessions = result.projects
     .flatMap((project) =>
       project.sessions.map((session) => ({
         id: session.id,
+        provider: session.provider,
         projectId: project.id,
         projectLabel: project.label,
         startedAt: session.startedAt,
@@ -132,6 +133,14 @@ export default async function Page() {
       })),
     )
     .sort((a, b) => b.endedAt.localeCompare(a.endedAt))
+
+  const providerSessionCounts = sessions.reduce(
+    (acc, session) => {
+      acc[session.provider] = (acc[session.provider] ?? 0) + 1
+      return acc
+    },
+    {} as Record<string, number>,
+  )
 
   const projectRows = result.projects.map((project) => {
     const turns = project.sessions.reduce((sum, session) => sum + session.turns.length, 0)
@@ -220,7 +229,12 @@ export default async function Page() {
       label: formatDateOnly(new Date(`${key}T00:00:00.000Z`)),
     }
   })
-  const maxDailyCost = Math.max(...dailySeries.map((entry) => entry.value), 0)
+
+  const projectSpendSeries = projectRows.slice(0, 8).map((project) => ({
+    project: project.label,
+    cost: project.cost,
+    sessions: project.sessions,
+  }))
 
   const windowLabel = `${formatDateOnly(result.window.from)} → ${formatDateOnly(result.window.to)}`
   const overallCacheRate = cacheRate(result.summary.observed.input, result.summary.observed.cacheRead)
@@ -239,11 +253,16 @@ export default async function Page() {
               Local-first session analytics
             </h1>
             <p className="text-sm text-muted-foreground">
-              Aggregated from <code>~/.pi/agent/sessions</code> using the extracted ingestion pipeline.
+              Aggregated from <code>~/.pi/agent/sessions</code> and <code>~/.claude/projects</code>.
             </p>
           </div>
 
           <div className="flex items-center gap-2">
+            {Object.entries(providerSessionCounts).map(([provider, count]) => (
+              <Badge key={provider} variant="outline" className="capitalize">
+                {provider}: {count}
+              </Badge>
+            ))}
             <Button variant="outline" asChild>
               <Link href="/">
                 <RefreshCcw className="size-4" /> Refresh
@@ -316,21 +335,10 @@ export default async function Page() {
               <Card className="border border-border/60">
                 <CardHeader>
                   <CardTitle className="text-base">Daily spend (last 7 days)</CardTitle>
-                  <CardDescription>Quick trend using observed session cost</CardDescription>
+                  <CardDescription>Observed session cost trend by day</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  {dailySeries.map((entry) => (
-                    <div key={entry.key} className="space-y-1.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">{entry.label}</span>
-                        <span className="font-mono">{formatCurrency(entry.value)}</span>
-                      </div>
-                      <Progress
-                        value={maxDailyCost > 0 ? (entry.value / maxDailyCost) * 100 : 0}
-                        className="h-1.5"
-                      />
-                    </div>
-                  ))}
+                <CardContent>
+                  <DailySpendChart data={dailySeries} />
                 </CardContent>
               </Card>
 
@@ -339,25 +347,8 @@ export default async function Page() {
                   <CardTitle className="text-base">Project spend share</CardTitle>
                   <CardDescription>Top projects by observed cost in the selected window</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  {projectRows.slice(0, 8).map((project) => {
-                    const percent =
-                      result.summary.observed.cost.total > 0
-                        ? (project.cost / result.summary.observed.cost.total) * 100
-                        : 0
-
-                    return (
-                      <div key={project.id} className="space-y-1.5">
-                        <div className="flex items-center justify-between gap-3 text-xs">
-                          <span className="truncate text-muted-foreground" title={project.id}>
-                            {project.label}
-                          </span>
-                          <span className="font-mono">{formatCurrency(project.cost)}</span>
-                        </div>
-                        <Progress value={percent} className="h-1.5" />
-                      </div>
-                    )
-                  })}
+                <CardContent>
+                  <ProjectSpendChart data={projectSpendSeries} />
                 </CardContent>
               </Card>
             </section>
@@ -456,6 +447,7 @@ export default async function Page() {
                       <TableRow>
                         <TableHead>Session</TableHead>
                         <TableHead>Project</TableHead>
+                        <TableHead>Provider</TableHead>
                         <TableHead className="text-right">Turns</TableHead>
                         <TableHead className="text-right">Invocations</TableHead>
                         <TableHead className="text-right">Tools</TableHead>
@@ -469,6 +461,11 @@ export default async function Page() {
                         <TableRow key={`${session.projectId}:${session.id}:${session.endedAt}`}>
                           <TableCell className="font-mono text-xs">{session.id.slice(0, 12)}…</TableCell>
                           <TableCell>{session.projectLabel || basename(session.projectId)}</TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className="capitalize">
+                              {session.provider}
+                            </Badge>
+                          </TableCell>
                           <TableCell className="text-right font-mono">{session.turns}</TableCell>
                           <TableCell className="text-right font-mono">{session.invocations}</TableCell>
                           <TableCell className="text-right font-mono">{session.tools}</TableCell>
@@ -508,7 +505,9 @@ export default async function Page() {
                         key={conflict.sessionId}
                         className="rounded-lg border border-amber-400/30 bg-background/70 p-3"
                       >
-                        <p className="font-mono text-xs">{conflict.sessionId}</p>
+                        <p className="font-mono text-xs">
+                          [{conflict.provider}] {conflict.sessionId}
+                        </p>
                         <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
                           {conflict.files.map((file) => (
                             <li key={`${file.path}:${file.hash}`} className="truncate" title={file.path}>

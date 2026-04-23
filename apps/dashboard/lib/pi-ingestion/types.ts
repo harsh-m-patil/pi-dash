@@ -1,3 +1,5 @@
+export type ProviderName = "pi" | "claude"
+
 export type ObservedUsage = {
   input: number
   output: number
@@ -46,6 +48,7 @@ export type Turn = {
 
 export type Session = {
   id: string
+  provider: ProviderName
   sourcePath: string
   cwd: string
   projectId: string
@@ -64,6 +67,7 @@ export type Project = {
 }
 
 export type SessionSource = {
+  provider: ProviderName
   path: string
   sessionId: string
   cwd: string
@@ -73,6 +77,7 @@ export type SessionSource = {
 }
 
 export type IngestionConflict = {
+  provider: ProviderName
   sessionId: string
   files: Array<{ path: string; hash: string }>
 }

@@ -4,12 +4,13 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
 
-import { discoverPiSessionSources } from "@/lib/pi-ingestion/discover"
-import { parsePiSessionContent } from "@/lib/pi-ingestion/parse"
+import { discoverSessionSources } from "@/lib/pi-ingestion/discover"
+import { parseClaudeSessionContent, parsePiSessionContent } from "@/lib/pi-ingestion/parse"
 import type {
   IngestionConflict,
   IngestionResult,
   Project,
+  ProviderName,
   Session,
   SessionSource,
   TimeWindow,
@@ -18,6 +19,8 @@ import { addUsage, createEmptyUsage } from "@/lib/pi-ingestion/usage"
 
 type IngestOptions = {
   sessionsDir?: string
+  claudeProjectsDir?: string
+  providers?: ProviderName[]
   from?: Date
   to?: Date
   days?: number
@@ -65,7 +68,6 @@ function filterSessionByWindow(session: Session, window: TimeWindow): Session | 
       const firstInvocation = invocations[0]!
       const lastInvocation = invocations[invocations.length - 1]!
 
-      const invocationIds = new Set(invocations.map((invocation) => invocation.id))
       const toolCalls = turn.toolCalls.filter((toolCall) =>
         invocations.some((invocation) => invocation.toolCallIds.includes(toolCall.id)),
       )
@@ -76,7 +78,6 @@ function filterSessionByWindow(session: Session, window: TimeWindow): Session | 
         endedAt: lastInvocation.timestamp || turn.endedAt,
         invocations,
         toolCalls,
-        userMessage: invocationIds.size > 0 ? turn.userMessage : "",
       }
     })
     .filter((turn): turn is Session["turns"][number] => turn !== null)
@@ -165,7 +166,7 @@ function resolveConflicts(
   const bySessionId = new Map<string, LoadedSource[]>()
 
   for (const loadedSource of loadedSources) {
-    const key = loadedSource.source.sessionId
+    const key = `${loadedSource.source.provider}:${loadedSource.source.sessionId}`
     const existing = bySessionId.get(key) ?? []
     existing.push(loadedSource)
     bySessionId.set(key, existing)
@@ -174,7 +175,8 @@ function resolveConflicts(
   const accepted: LoadedSource[] = []
   const conflicts: IngestionConflict[] = []
 
-  for (const [sessionId, sources] of bySessionId) {
+  for (const [key, sources] of bySessionId) {
+    const [provider, sessionId] = key.split(":", 2)
     const uniqueByHash = new Map<string, LoadedSource>()
     for (const source of sources) {
       if (!uniqueByHash.has(source.hash)) {
@@ -184,7 +186,8 @@ function resolveConflicts(
 
     if (uniqueByHash.size > 1) {
       conflicts.push({
-        sessionId,
+        provider: (provider as ProviderName) ?? sources[0]!.source.provider,
+        sessionId: sessionId ?? sources[0]!.source.sessionId,
         files: sources.map((source) => ({ path: source.source.path, hash: source.hash })),
       })
       continue
@@ -226,17 +229,27 @@ function groupByProject(sessions: Session[]): Project[] {
   return disambiguateProjectLabels(projects)
 }
 
-export async function ingestPiSessions(options: IngestOptions = {}): Promise<IngestionResult> {
+function parseSessionForProvider(source: SessionSource, content: string): Session | null {
+  if (source.provider === "claude") return parseClaudeSessionContent(source, content)
+  return parsePiSessionContent(source, content)
+}
+
+export async function ingestAgentSessions(options: IngestOptions = {}): Promise<IngestionResult> {
   const window = resolveWindow(options)
 
-  const discovered = await discoverPiSessionSources(options.sessionsDir)
+  const discovered = await discoverSessionSources({
+    piSessionsDir: options.sessionsDir,
+    claudeProjectsDir: options.claudeProjectsDir,
+    providers: options.providers,
+  })
+
   const loadedSources = await loadSources(discovered)
   const { accepted, conflicts } = resolveConflicts(loadedSources)
 
   const sessions: Session[] = []
 
   for (const source of accepted) {
-    const session = parsePiSessionContent(source.source, source.content)
+    const session = parseSessionForProvider(source.source, source.content)
     if (!session) continue
 
     const inWindow = filterSessionByWindow(session, window)
@@ -253,4 +266,8 @@ export async function ingestPiSessions(options: IngestOptions = {}): Promise<Ing
     conflicts,
     summary: summarize(projects),
   }
+}
+
+export async function ingestPiSessions(options: IngestOptions = {}): Promise<IngestionResult> {
+  return ingestAgentSessions(options)
 }
