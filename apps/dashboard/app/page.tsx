@@ -1,23 +1,8 @@
-import Link from "next/link"
-import {
-  AlertTriangle,
-  Bot,
-  CalendarDays,
-  Coins,
-  Database,
-  RefreshCcw,
-  Timer,
-  Wrench,
-  type LucideIcon,
-} from "lucide-react"
+import { Bot, CalendarDays, Coins, Database, Timer, type LucideIcon } from "lucide-react"
 
 import { DailySpendChart, DailyTokenMixChart, ProjectSpendChart } from "@/components/dashboard-charts"
-import { DateRangeFilter } from "@/components/date-range-filter"
-import { ProjectsDataTable, type ProjectTableRow } from "@/components/projects-data-table"
-import { SessionsDataTable, type SessionTableRow } from "@/components/sessions-data-table"
-import { ingestAgentSessions, type ProviderName } from "@/lib/pi-ingestion"
-import { Badge } from "@workspace/ui/components/badge"
-import { Button } from "@workspace/ui/components/button"
+import { DashboardPageShell } from "@/components/dashboard-page-shell"
+import { getDashboardData, type PageSearchParams } from "@/lib/dashboard-data"
 import {
   Card,
   CardAction,
@@ -36,6 +21,10 @@ import {
 
 export const dynamic = "force-dynamic"
 
+type PageProps = {
+  searchParams?: Promise<PageSearchParams> | PageSearchParams
+}
+
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -51,34 +40,6 @@ function formatCurrency(value: number): string {
 
 function formatNumber(value: number): string {
   return integer.format(Math.round(value || 0))
-}
-
-function formatDate(value: string): string {
-  const parsed = Date.parse(value)
-  if (!Number.isFinite(parsed)) return "—"
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(parsed))
-}
-
-function formatDateOnly(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "2-digit",
-  }).format(date)
-}
-
-function isoDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
-function cacheRate(input: number, cacheRead: number): number {
-  const total = input + cacheRead
-  if (total <= 0) return 0
-  return (cacheRead / total) * 100
 }
 
 type StatCardProps = {
@@ -107,556 +68,126 @@ function StatCard({ title, value, description, icon: Icon, emphasis }: StatCardP
   )
 }
 
-type DashboardProviderFilter = "all" | ProviderName
-
-type PageSearchParams = Record<string, string | string[] | undefined>
-
-type PageProps = {
-  searchParams?: Promise<PageSearchParams> | PageSearchParams
-}
-
-const WINDOW_PRESETS = [7, 14, 30, 90] as const
-const DEFAULT_WINDOW_DAYS = WINDOW_PRESETS[0]
-const DATE_INPUT_REGEX = /^\d{4}-\d{2}-\d{2}$/
-
-function firstQueryValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value
-}
-
-function normalizeProviderFilter(value: string | undefined): DashboardProviderFilter {
-  if (value === "pi" || value === "claude") return value
-  return "all"
-}
-
-function normalizeWindowDays(value: string | undefined): number {
-  const parsed = Number.parseInt(value ?? "", 10)
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_WINDOW_DAYS
-  return Math.min(parsed, 365)
-}
-
-function parseDateInput(value: string | undefined, boundary: "start" | "end"): Date | undefined {
-  if (!value || !DATE_INPUT_REGEX.test(value)) return undefined
-
-  const timestamp = Date.parse(
-    boundary === "start" ? `${value}T00:00:00.000Z` : `${value}T23:59:59.999Z`,
-  )
-
-  if (!Number.isFinite(timestamp)) return undefined
-  return new Date(timestamp)
-}
-
-function dateInputValue(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
-function addUtcDays(date: Date, days: number): Date {
-  const next = new Date(date)
-  next.setUTCDate(next.getUTCDate() + days)
-  return next
-}
-
-function buildQueryHref({
-  provider,
-  days,
-  from,
-  to,
-}: {
-  provider: DashboardProviderFilter
-  days?: number
-  from?: string
-  to?: string
-}): string {
-  const search = new URLSearchParams()
-
-  if (provider !== "all") search.set("provider", provider)
-
-  if (from && to) {
-    search.set("from", from)
-    search.set("to", to)
-  } else if (days && days !== DEFAULT_WINDOW_DAYS) {
-    search.set("days", String(days))
-  }
-
-  const query = search.toString()
-  return query ? `/?${query}` : "/"
-}
-
-function buildDayKeys({ days, from, to }: { days: number; from?: Date; to?: Date }): string[] {
-  const keys: string[] = []
-
-  if (from && to) {
-    let cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()))
-    const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()))
-
-    while (cursor.getTime() <= end.getTime()) {
-      keys.push(isoDateKey(cursor))
-      cursor = addUtcDays(cursor, 1)
-    }
-
-    return keys
-  }
-
-  const today = new Date()
-  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
-
-  for (let index = days - 1; index >= 0; index -= 1) {
-    keys.push(isoDateKey(addUtcDays(todayUtc, -index)))
-  }
-
-  return keys
-}
-
 export default async function Page({ searchParams }: PageProps) {
-  const resolvedSearchParams = searchParams instanceof Promise ? await searchParams : searchParams ?? {}
-  const selectedProviderFilter = normalizeProviderFilter(firstQueryValue(resolvedSearchParams.provider))
-  const fromQueryValue = firstQueryValue(resolvedSearchParams.from)
-  const toQueryValue = firstQueryValue(resolvedSearchParams.to)
-  const selectedDays = normalizeWindowDays(firstQueryValue(resolvedSearchParams.days))
-
-  let customFrom = parseDateInput(fromQueryValue, "start")
-  let customTo = parseDateInput(toQueryValue, "end")
-
-  if (customFrom && customTo && customFrom.getTime() > customTo.getTime()) {
-    const swappedFrom = customTo
-    const swappedTo = customFrom
-    customFrom = swappedFrom
-    customTo = swappedTo
-  }
-
-  const customWindow = customFrom && customTo ? { from: customFrom, to: customTo } : null
-
-  const providers: ProviderName[] | undefined =
-    selectedProviderFilter === "all" ? undefined : [selectedProviderFilter]
-
-  const result = await ingestAgentSessions(
-    customWindow
-      ? { from: customWindow.from, to: customWindow.to, providers }
-      : { days: selectedDays, providers },
-  )
-
-  const activeWindowQuery = customWindow
-    ? { from: dateInputValue(customWindow.from), to: dateInputValue(customWindow.to) }
-    : { days: selectedDays }
-
-  const providerHref = (providerFilter: DashboardProviderFilter): string =>
-    buildQueryHref({ provider: providerFilter, ...activeWindowQuery })
-
-  const fromInput = customWindow ? dateInputValue(customWindow.from) : (fromQueryValue ?? "")
-  const toInput = customWindow ? dateInputValue(customWindow.to) : (toQueryValue ?? "")
-
-  const providerFilters: Array<{ value: DashboardProviderFilter; label: string }> = [
-    { value: "all", label: "All providers" },
-    { value: "pi", label: "Pi" },
-    { value: "claude", label: "Claude" },
-  ]
-
-  const sessions = result.projects
-    .flatMap((project) =>
-      project.sessions.map((session) => ({
-        id: session.id,
-        provider: session.provider,
-        projectId: project.id,
-        projectLabel: project.label,
-        endedAt: session.endedAt,
-        turns: session.turns.length,
-        invocations: session.turns.reduce((sum, turn) => sum + turn.invocations.length, 0),
-        tools: session.turns.reduce((sum, turn) => sum + turn.toolCalls.length, 0),
-        cost: session.observed.cost.total,
-        totalTokens: session.observed.totalTokens,
-        inputTokens: session.observed.input,
-        outputTokens: session.observed.output,
-        cacheTokens: session.observed.cacheRead + session.observed.cacheWrite,
-      })),
-    )
-    .sort((a, b) => b.endedAt.localeCompare(a.endedAt))
-
-  const recentSessionRows: SessionTableRow[] = sessions.map((session) => ({
-    id: session.id,
-    provider: session.provider,
-    projectId: session.projectId,
-    projectName: session.projectLabel || session.projectId,
-    turns: session.turns,
-    invocations: session.invocations,
-    tools: session.tools,
-    totalTokens: session.totalTokens,
-    cost: session.cost,
-    endedAt: session.endedAt,
-    endedAtLabel: formatDate(session.endedAt),
-  }))
-
-  const providerSessionCounts = sessions.reduce(
-    (acc, session) => {
-      acc[session.provider] = (acc[session.provider] ?? 0) + 1
-      return acc
-    },
-    {} as Record<string, number>,
-  )
-
-  const projectRows: ProjectTableRow[] = result.projects.map((project) => {
-    const turns = project.sessions.reduce((sum, session) => sum + session.turns.length, 0)
-    const invocations = project.sessions.reduce(
-      (sum, session) => sum + session.turns.reduce((inner, turn) => inner + turn.invocations.length, 0),
-      0,
-    )
-
-    return {
-      id: project.id,
-      label: project.label,
-      sessions: project.sessions.length,
-      turns,
-      invocations,
-      tokens: project.observed.totalTokens,
-      cost: project.observed.cost.total,
-      cacheRate: cacheRate(project.observed.input, project.observed.cacheRead),
-    }
-  })
-
-  const toolMap = new Map<
-    string,
-    { calls: number; errors: number; latencyTotalMs: number; latencySamples: number }
-  >()
-
-  for (const project of result.projects) {
-    for (const session of project.sessions) {
-      for (const turn of session.turns) {
-        for (const toolCall of turn.toolCalls) {
-          const key = toolCall.normalizedName
-          const existing = toolMap.get(key) ?? {
-            calls: 0,
-            errors: 0,
-            latencyTotalMs: 0,
-            latencySamples: 0,
-          }
-
-          existing.calls += 1
-          if (toolCall.outcome === "error") existing.errors += 1
-          if (typeof toolCall.latencyMs === "number") {
-            existing.latencyTotalMs += toolCall.latencyMs
-            existing.latencySamples += 1
-          }
-
-          toolMap.set(key, existing)
-        }
-      }
-    }
-  }
-
-  const topTools = [...toolMap.entries()]
-    .map(([name, stats]) => ({
-      name,
-      calls: stats.calls,
-      errors: stats.errors,
-      avgLatencyMs:
-        stats.latencySamples > 0 ? Math.round(stats.latencyTotalMs / stats.latencySamples) : null,
-    }))
-    .sort((a, b) => b.calls - a.calls)
-
-  const dailySpendBuckets = new Map<string, number>()
-  const dailyInputBuckets = new Map<string, number>()
-  const dailyOutputBuckets = new Map<string, number>()
-  const dailyCacheBuckets = new Map<string, number>()
-  const dayKeys = buildDayKeys({
-    days: selectedDays,
-    from: customWindow?.from,
-    to: customWindow?.to,
-  })
-
-  for (const key of dayKeys) {
-    dailySpendBuckets.set(key, 0)
-    dailyInputBuckets.set(key, 0)
-    dailyOutputBuckets.set(key, 0)
-    dailyCacheBuckets.set(key, 0)
-  }
-
-  for (const session of sessions) {
-    const parsed = Date.parse(session.endedAt)
-    if (!Number.isFinite(parsed)) continue
-    const key = isoDateKey(new Date(parsed))
-    if (!dailySpendBuckets.has(key)) continue
-
-    dailySpendBuckets.set(key, (dailySpendBuckets.get(key) ?? 0) + session.cost)
-    dailyInputBuckets.set(key, (dailyInputBuckets.get(key) ?? 0) + session.inputTokens)
-    dailyOutputBuckets.set(key, (dailyOutputBuckets.get(key) ?? 0) + session.outputTokens)
-    dailyCacheBuckets.set(key, (dailyCacheBuckets.get(key) ?? 0) + session.cacheTokens)
-  }
-
-  const dailySeries = dayKeys.map((key) => ({
-    key,
-    value: dailySpendBuckets.get(key) ?? 0,
-    label: formatDateOnly(new Date(`${key}T00:00:00.000Z`)),
-  }))
-
-  const dailyTokenMixSeries = dayKeys.map((key) => ({
-    key,
-    input: dailyInputBuckets.get(key) ?? 0,
-    output: dailyOutputBuckets.get(key) ?? 0,
-    cache: dailyCacheBuckets.get(key) ?? 0,
-    label: formatDateOnly(new Date(`${key}T00:00:00.000Z`)),
-  }))
-
-  const tokenMixTotals = dailyTokenMixSeries.reduce(
-    (acc, day) => ({
-      input: acc.input + day.input,
-      output: acc.output + day.output,
-      cache: acc.cache + day.cache,
-    }),
-    { input: 0, output: 0, cache: 0 },
-  )
-
-  const projectSpendSeries = projectRows.slice(0, 8).map((project) => ({
-    project: project.label,
-    cost: project.cost,
-    sessions: project.sessions,
-  }))
-
-  const chartWindowLabel = customWindow ? "custom range" : `last ${selectedDays} days`
-  const overallCacheRate = cacheRate(result.summary.observed.input, result.summary.observed.cacheRead)
+  const data = await getDashboardData(searchParams)
 
   return (
-    <main className="min-h-svh">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-10 md:py-12">
-        <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">Agent Dashboard</Badge>
-            </div>
-            <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
-              Local-first session analytics
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Aggregated from <code>~/.pi/agent/sessions</code> and <code>~/.claude/projects</code>.
-            </p>
-          </div>
+    <DashboardPageShell
+      path="/"
+      title="Overview"
+      description="Aggregated from ~/.pi/agent/sessions and ~/.claude/projects."
+      selectedWindowLabel={data.selectedWindowLabel}
+      windowLabel={data.windowLabel}
+      selectedProviderFilter={data.selectedProviderFilter}
+      selectedDays={data.selectedDays}
+      fromInput={data.fromInput}
+      toInput={data.toInput}
+      isCustomWindow={data.isCustomWindow}
+      providerSessionCounts={data.providerSessionCounts}
+    >
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          title="Observed cost"
+          value={formatCurrency(data.result.summary.observed.cost.total)}
+          description="Input + output + cache read/write cost totals"
+          icon={Coins}
+          emphasis={`${data.result.summary.sessions} sessions in window`}
+        />
+        <StatCard
+          title="Observed tokens"
+          value={formatNumber(data.result.summary.observed.totalTokens)}
+          description="input + output + cacheRead + cacheWrite"
+          icon={Database}
+          emphasis={`${formatNumber(data.result.summary.invocations)} invocations`}
+        />
+        <StatCard
+          title="Turns"
+          value={formatNumber(data.result.summary.turns)}
+          description="User message through assistant stop=stop completion"
+          icon={Bot}
+          emphasis={`${formatNumber(data.result.summary.projects)} projects`}
+        />
+        <StatCard
+          title="Cache read rate"
+          value={`${data.overallCacheRate.toFixed(1)}%`}
+          description="cacheRead / (input + cacheRead)"
+          icon={Timer}
+          emphasis={`${formatNumber(data.result.summary.observed.cacheRead)} cache-read tokens`}
+        />
+      </section>
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {Object.entries(providerSessionCounts).map(([provider, count]) => (
-              <Badge key={provider} variant="outline" className="capitalize">
-                {provider}: {count}
-              </Badge>
-            ))}
-            <div className="flex flex-wrap items-center gap-1">
-              {providerFilters.map((providerFilter) => (
-                <Button
-                  key={providerFilter.value}
-                  variant={providerFilter.value === selectedProviderFilter ? "default" : "outline"}
-                  size="sm"
-                  asChild
-                >
-                  <Link href={providerHref(providerFilter.value)}>{providerFilter.label}</Link>
-                </Button>
-              ))}
-            </div>
-            <DateRangeFilter
-              currentDays={selectedDays}
-              currentFrom={fromInput}
-              currentTo={toInput}
-              isCustom={!!customWindow}
-              provider={selectedProviderFilter}
-            />
-            <Button variant="outline" size="sm" asChild>
-              <Link href={providerHref(selectedProviderFilter)}>
-                <RefreshCcw className="size-4" /> Refresh
-              </Link>
-            </Button>
-          </div>
-        </header>
-
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            title="Observed cost"
-            value={formatCurrency(result.summary.observed.cost.total)}
-            description="Input + output + cache read/write cost totals"
-            icon={Coins}
-            emphasis={`${result.summary.sessions} sessions in window`}
-          />
-          <StatCard
-            title="Observed tokens"
-            value={formatNumber(result.summary.observed.totalTokens)}
-            description="input + output + cacheRead + cacheWrite"
-            icon={Database}
-            emphasis={`${formatNumber(result.summary.invocations)} invocations`}
-          />
-          <StatCard
-            title="Turns"
-            value={formatNumber(result.summary.turns)}
-            description="User message through assistant stop=stop completion"
-            icon={Bot}
-            emphasis={`${formatNumber(result.summary.projects)} projects`}
-          />
-          <StatCard
-            title="Cache read rate"
-            value={`${overallCacheRate.toFixed(1)}%`}
-            description="cacheRead / (input + cacheRead)"
-            icon={Timer}
-            emphasis={`${formatNumber(result.summary.observed.cacheRead)} cache-read tokens`}
-          />
-        </section>
-
-        {result.summary.sessions === 0 ? (
-          <Card className="border border-dashed border-border/70 bg-muted/10">
-            <CardContent className="py-10">
-              <Empty>
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <CalendarDays className="size-4" />
-                  </EmptyMedia>
-                  <EmptyTitle>No sessions found for this provider/window</EmptyTitle>
-                  <EmptyDescription>
-                    Run some Pi sessions or widen the time window, then refresh this page.
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
+      {data.result.summary.sessions === 0 ? (
+        <Card className="border border-dashed border-border/70 bg-muted/10">
+          <CardContent className="py-10">
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <CalendarDays className="size-4" />
+                </EmptyMedia>
+                <EmptyTitle>No sessions found for this provider/window</EmptyTitle>
+                <EmptyDescription>
+                  Run some Pi sessions or widen the time window, then refresh this page.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </CardContent>
+        </Card>
+      ) : (
+        <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          <Card className="border border-border/60">
+            <CardHeader>
+              <CardTitle className="text-base">Daily spend ({data.chartWindowLabel})</CardTitle>
+              <CardDescription>Observed session cost trend by day</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DailySpendChart data={data.dailySeries} />
             </CardContent>
           </Card>
-        ) : (
-          <>
-            <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-              <Card className="border border-border/60">
-                <CardHeader>
-                  <CardTitle className="text-base">Daily spend ({chartWindowLabel})</CardTitle>
-                  <CardDescription>Observed session cost trend by day</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <DailySpendChart data={dailySeries} />
-                </CardContent>
-              </Card>
 
-              <Card className="border border-border/60">
-                <CardHeader>
-                  <CardTitle className="text-base">Daily token mix ({chartWindowLabel})</CardTitle>
-                  <CardDescription>Stacked input vs output vs cache tokens by day</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
-                    <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
-                      <span className="size-2 rounded-full bg-blue-500" />
-                      <span className="text-muted-foreground">Input</span>
-                      <span className="font-mono text-blue-700 dark:text-blue-300">
-                        {formatNumber(tokenMixTotals.input)}
-                      </span>
-                    </div>
-                    <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
-                      <span className="size-2 rounded-full bg-violet-500" />
-                      <span className="text-muted-foreground">Output</span>
-                      <span className="font-mono text-violet-700 dark:text-violet-300">
-                        {formatNumber(tokenMixTotals.output)}
-                      </span>
-                    </div>
-                    <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
-                      <span className="size-2 rounded-full bg-emerald-500" />
-                      <span className="text-muted-foreground">Cache</span>
-                      <span className="font-mono text-emerald-700 dark:text-emerald-300">
-                        {formatNumber(tokenMixTotals.cache)}
-                      </span>
-                    </div>
-                  </div>
-                  <DailyTokenMixChart data={dailyTokenMixSeries} />
-                </CardContent>
-              </Card>
+          <Card className="border border-border/60">
+            <CardHeader>
+              <CardTitle className="text-base">Daily token mix ({data.chartWindowLabel})</CardTitle>
+              <CardDescription>Stacked input vs output vs cache tokens by day</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
+                  <span className="size-2 rounded-full bg-blue-500" />
+                  <span className="text-muted-foreground">Input</span>
+                  <span className="font-mono text-blue-700 dark:text-blue-300">
+                    {formatNumber(data.tokenMixTotals.input)}
+                  </span>
+                </div>
+                <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
+                  <span className="size-2 rounded-full bg-violet-500" />
+                  <span className="text-muted-foreground">Output</span>
+                  <span className="font-mono text-violet-700 dark:text-violet-300">
+                    {formatNumber(data.tokenMixTotals.output)}
+                  </span>
+                </div>
+                <div className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
+                  <span className="size-2 rounded-full bg-emerald-500" />
+                  <span className="text-muted-foreground">Cache</span>
+                  <span className="font-mono text-emerald-700 dark:text-emerald-300">
+                    {formatNumber(data.tokenMixTotals.cache)}
+                  </span>
+                </div>
+              </div>
+              <DailyTokenMixChart data={data.dailyTokenMixSeries} />
+            </CardContent>
+          </Card>
 
-              <Card className="border border-border/60">
-                <CardHeader>
-                  <CardTitle className="text-base">Project spend share</CardTitle>
-                  <CardDescription>Top projects by observed cost in the selected window</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ProjectSpendChart data={projectSpendSeries} />
-                </CardContent>
-              </Card>
-            </section>
-
-            <section className="grid gap-4 xl:grid-cols-3">
-              <Card className="border border-border/60 xl:col-span-2">
-                <CardHeader>
-                  <CardTitle className="text-base">Projects</CardTitle>
-                  <CardDescription>Canonical project ID is full cwd, label is basename</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ProjectsDataTable data={projectRows} />
-                </CardContent>
-              </Card>
-
-              <Card className="border border-border/60">
-                <CardHeader>
-                  <CardTitle className="text-base">Tools ({topTools.length})</CardTitle>
-                  <CardDescription>All tool calls discovered from session logs</CardDescription>
-                </CardHeader>
-                <CardContent className="max-h-[600px] space-y-3 overflow-y-auto">
-                  {topTools.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No tool calls recorded in this window.</p>
-                  ) : (
-                    topTools.map((tool) => (
-                      <div key={tool.name} className="rounded-lg border border-border/60 p-2.5">
-                        <div className="flex items-center justify-between">
-                          <p className="flex items-center gap-1.5 font-medium">
-                            <Wrench className="size-3.5 text-muted-foreground" />
-                            {tool.name}
-                          </p>
-                          <Badge variant="outline">{tool.calls} calls</Badge>
-                        </div>
-                        <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                          <span>Errors: {tool.errors}</span>
-                          <span>
-                            Avg latency: {tool.avgLatencyMs !== null ? `${tool.avgLatencyMs}ms` : "—"}
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </CardContent>
-              </Card>
-            </section>
-
-            <section className="grid gap-4">
-              <Card className="border border-border/60">
-                <CardHeader>
-                  <CardTitle className="text-base">Recent sessions</CardTitle>
-                  <CardDescription>Most recently completed sessions in the selected time window</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <SessionsDataTable data={recentSessionRows} />
-                </CardContent>
-              </Card>
-            </section>
-
-            {result.conflicts.length > 0 ? (
-              <section>
-                <Card className="border border-amber-500/40 bg-amber-500/5">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <AlertTriangle className="size-4 text-amber-400" />
-                      Session ID conflicts ({result.conflicts.length})
-                    </CardTitle>
-                    <CardDescription>
-                      Conflicted session IDs are excluded because duplicate IDs point to different file
-                      content.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {result.conflicts.map((conflict) => (
-                      <div
-                        key={conflict.sessionId}
-                        className="rounded-lg border border-amber-400/30 bg-background/70 p-3"
-                      >
-                        <p className="font-mono text-xs">
-                          [{conflict.provider}] {conflict.sessionId}
-                        </p>
-                        <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                          {conflict.files.map((file) => (
-                            <li key={`${file.path}:${file.hash}`} className="truncate" title={file.path}>
-                              {file.path}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              </section>
-            ) : null}
-          </>
-        )}
-      </div>
-    </main>
+          <Card className="border border-border/60">
+            <CardHeader>
+              <CardTitle className="text-base">Project spend share</CardTitle>
+              <CardDescription>Top projects by observed cost in the selected window</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ProjectSpendChart data={data.projectSpendSeries} />
+            </CardContent>
+          </Card>
+        </section>
+      )}
+    </DashboardPageShell>
   )
 }

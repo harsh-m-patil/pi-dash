@@ -21,6 +21,7 @@ const PRESETS = [
 ] as const
 
 type DateRangeFilterProps = {
+  basePath?: string
   currentDays: number
   currentFrom: string
   currentTo: string
@@ -29,11 +30,13 @@ type DateRangeFilterProps = {
 }
 
 function buildHref({
+  path,
   provider,
   days,
   from,
   to,
 }: {
+  path: string
   provider: string
   days?: number
   from?: string
@@ -48,7 +51,7 @@ function buildHref({
     search.set("days", String(days))
   }
   const query = search.toString()
-  return query ? `/?${query}` : "/"
+  return query ? `${path}?${query}` : path
 }
 
 function triggerLabel(isCustom: boolean, days: number, from: string, to: string): string {
@@ -58,6 +61,7 @@ function triggerLabel(isCustom: boolean, days: number, from: string, to: string)
 }
 
 export function DateRangeFilter({
+  basePath = "/",
   currentDays,
   currentFrom,
   currentTo,
@@ -72,16 +76,16 @@ export function DateRangeFilter({
   const handlePreset = useCallback(
     (days: number) => {
       setOpen(false)
-      router.push(buildHref({ provider, days }))
+      router.push(buildHref({ path: basePath, provider, days }))
     },
-    [provider, router],
+    [basePath, provider, router],
   )
 
   const handleApplyCustom = useCallback(() => {
     if (!fromDate || !toDate) return
     setOpen(false)
-    router.push(buildHref({ provider, from: fromDate, to: toDate }))
-  }, [provider, fromDate, toDate, router])
+    router.push(buildHref({ path: basePath, provider, from: fromDate, to: toDate }))
+  }, [basePath, provider, fromDate, toDate, router])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

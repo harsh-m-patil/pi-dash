@@ -1,8 +1,10 @@
 import { Geist, Geist_Mono } from "next/font/google"
 
+import { DashboardShell } from "@/components/dashboard-shell"
 import { ThemeProvider } from "@/components/theme-provider"
 import "@workspace/ui/globals.css"
 import { cn } from "@workspace/ui/lib/utils"
+import { TooltipProvider } from "@workspace/ui/components/tooltip"
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" })
 
@@ -23,7 +25,11 @@ export default function RootLayout({
       className={cn("dark antialiased font-sans", geist.variable, fontMono.variable)}
     >
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+					<TooltipProvider>
+          <DashboardShell>{children}</DashboardShell>
+					</TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   )
