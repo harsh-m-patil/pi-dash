@@ -18,6 +18,7 @@
     ".": "./src/index.ts",
     "./discover": "./src/discover.ts",
     "./ingest": "./src/ingest.ts",
+    "./service": "./src/service.ts",
     "./parse": "./src/parse.ts",
     "./tooling": "./src/tooling.ts",
     "./types": "./src/types.ts",

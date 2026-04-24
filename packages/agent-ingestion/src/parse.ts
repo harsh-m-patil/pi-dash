@@ -8,6 +8,7 @@ import type {
   SessionSource,
   Turn,
 } from "./types"
+import { calculateUsageCost } from "./cost"
 import { normalizeToolName } from "./tooling"
 import { addUsage, createEmptyUsage } from "./usage"
 
@@ -80,6 +81,7 @@ type ClaudeEntry = {
       output_tokens?: number
       cache_creation_input_tokens?: number
       cache_read_input_tokens?: number
+      speed?: "standard" | "fast"
     }
     stop_reason?: string
   }
@@ -98,12 +100,18 @@ function toNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value)
+}
+
 function parseObservedUsageFromValues(values: {
   input?: number
   output?: number
   cacheRead?: number
   cacheWrite?: number
   totalTokens?: number
+  model?: string
+  speed?: "standard" | "fast"
   cost?: {
     input?: number
     output?: number
@@ -118,6 +126,54 @@ function parseObservedUsageFromValues(values: {
   const cacheWrite = toNumber(values.cacheWrite)
   const totalTokens = toNumber(values.totalTokens) || input + output + cacheRead + cacheWrite
 
+  const calculatedCost = calculateUsageCost(
+    values.model,
+    { input, output, cacheRead, cacheWrite },
+    values.speed,
+  )
+
+  const inputCostValue = values.cost?.input
+  const outputCostValue = values.cost?.output
+  const cacheReadCostValue = values.cost?.cacheRead
+  const cacheWriteCostValue = values.cost?.cacheWrite
+  const totalCostValue = values.cost?.total
+
+  const hasAnyPositiveObservedCost = [
+    inputCostValue,
+    outputCostValue,
+    cacheReadCostValue,
+    cacheWriteCostValue,
+    totalCostValue,
+  ].some((value) => isFiniteNumber(value) && value > 0)
+
+  const shouldUseCalculatedCost = totalTokens > 0 && !hasAnyPositiveObservedCost
+
+  const inputCost = shouldUseCalculatedCost
+    ? calculatedCost.input
+    : isFiniteNumber(inputCostValue)
+      ? inputCostValue
+      : calculatedCost.input
+  const outputCost = shouldUseCalculatedCost
+    ? calculatedCost.output
+    : isFiniteNumber(outputCostValue)
+      ? outputCostValue
+      : calculatedCost.output
+  const cacheReadCost = shouldUseCalculatedCost
+    ? calculatedCost.cacheRead
+    : isFiniteNumber(cacheReadCostValue)
+      ? cacheReadCostValue
+      : calculatedCost.cacheRead
+  const cacheWriteCost = shouldUseCalculatedCost
+    ? calculatedCost.cacheWrite
+    : isFiniteNumber(cacheWriteCostValue)
+      ? cacheWriteCostValue
+      : calculatedCost.cacheWrite
+  const totalCost = shouldUseCalculatedCost
+    ? calculatedCost.total
+    : isFiniteNumber(totalCostValue)
+      ? totalCostValue
+      : inputCost + outputCost + cacheReadCost + cacheWriteCost
+
   return {
     input,
     output,
@@ -125,11 +181,11 @@ function parseObservedUsageFromValues(values: {
     cacheWrite,
     totalTokens,
     cost: {
-      input: toNumber(values.cost?.input),
-      output: toNumber(values.cost?.output),
-      cacheRead: toNumber(values.cost?.cacheRead),
-      cacheWrite: toNumber(values.cost?.cacheWrite),
-      total: toNumber(values.cost?.total),
+      input: inputCost,
+      output: outputCost,
+      cacheRead: cacheReadCost,
+      cacheWrite: cacheWriteCost,
+      total: totalCost,
     },
   }
 }
@@ -286,6 +342,7 @@ export function parsePiSessionContent(source: SessionSource, content: string): S
         cacheRead: entry.message.usage.cacheRead,
         cacheWrite: entry.message.usage.cacheWrite,
         totalTokens: entry.message.usage.totalTokens,
+        model: entry.message.model,
         cost: entry.message.usage.cost,
       })
       if (usage.totalTokens === 0) continue
@@ -632,6 +689,8 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
       output: msg.usage.usage?.output_tokens,
       cacheRead: msg.usage.usage?.cache_read_input_tokens,
       cacheWrite: msg.usage.usage?.cache_creation_input_tokens,
+      model: msg.model,
+      speed: msg.usage.usage?.speed,
     })
     if (usage.totalTokens === 0) continue
 

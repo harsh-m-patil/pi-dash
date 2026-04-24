@@ -1,6 +1,6 @@
 import { basename } from "node:path"
 
-import { ingestAgentSessions, type ProviderName } from "@workspace/agent-ingestion"
+import { ingestLocalSessions, type ProviderName } from "@workspace/agent-ingestion"
 
 export type DashboardProviderFilter = "all" | ProviderName
 export type PageSearchParams = Record<string, string | string[] | undefined>
@@ -49,7 +49,7 @@ export type DashboardToolRow = {
 }
 
 export type DashboardData = {
-  result: Awaited<ReturnType<typeof ingestAgentSessions>>
+  result: Awaited<ReturnType<typeof ingestLocalSessions>>
   selectedProviderFilter: DashboardProviderFilter
   selectedDays: number
   fromInput: string
@@ -221,7 +221,7 @@ export async function getDashboardData(searchParamsInput: DashboardSearchParamsI
   const providers: ProviderName[] | undefined =
     selectedProviderFilter === "all" ? undefined : [selectedProviderFilter]
 
-  const result = await ingestAgentSessions(
+  const result = await ingestLocalSessions(
     customWindow
       ? { from: customWindow.from, to: customWindow.to, providers }
       : { days: selectedDays, providers },
