@@ -1,0 +1,26 @@
+{
+  "name": "@workspace/agent-ingestion",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "@workspace/typescript-config": "workspace:*",
+    "typescript": "^5.9.3"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./discover": "./src/discover.ts",
+    "./ingest": "./src/ingest.ts",
+    "./parse": "./src/parse.ts",
+    "./tooling": "./src/tooling.ts",
+    "./types": "./src/types.ts",
+    "./usage": "./src/usage.ts"
+  }
+}

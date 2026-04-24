@@ -1,5 +1,7 @@
 "use client"
 
+import { Suspense } from "react"
+
 import { AppSidebar } from "@/components/app-sidebar"
 import {
   SidebarInset,
@@ -10,7 +12,9 @@ import {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
-      <AppSidebar />
+      <Suspense fallback={null}>
+        <AppSidebar />
+      </Suspense>
       <SidebarInset>
         <header className="sticky top-0 z-20 flex h-12 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur">
           <SidebarTrigger />

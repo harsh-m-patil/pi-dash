@@ -1,6 +1,6 @@
 import { basename } from "node:path"
 
-import { ingestAgentSessions, type ProviderName } from "@/lib/pi-ingestion"
+import { ingestAgentSessions, type ProviderName } from "@workspace/agent-ingestion"
 
 export type DashboardProviderFilter = "all" | ProviderName
 export type PageSearchParams = Record<string, string | string[] | undefined>

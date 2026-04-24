@@ -1,4 +1,4 @@
-# pi-dash
+# Agents Dashboard
 
 Local-first analytics dashboard for Pi coding sessions.
 

@@ -4,8 +4,8 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
 
-import { discoverSessionSources } from "@/lib/pi-ingestion/discover"
-import { parseClaudeSessionContent, parsePiSessionContent } from "@/lib/pi-ingestion/parse"
+import { discoverSessionSources } from "./discover"
+import { parseClaudeSessionContent, parsePiSessionContent } from "./parse"
 import type {
   IngestionConflict,
   IngestionResult,
@@ -14,8 +14,8 @@ import type {
   Session,
   SessionSource,
   TimeWindow,
-} from "@/lib/pi-ingestion/types"
-import { addUsage, createEmptyUsage } from "@/lib/pi-ingestion/usage"
+} from "./types"
+import { addUsage, createEmptyUsage } from "./usage"
 
 type IngestOptions = {
   sessionsDir?: string

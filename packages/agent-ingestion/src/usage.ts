@@ -1,4 +1,4 @@
-import type { ObservedUsage } from "@/lib/pi-ingestion/types"
+import type { ObservedUsage } from "./types"
 
 export function createEmptyUsage(): ObservedUsage {
   return {

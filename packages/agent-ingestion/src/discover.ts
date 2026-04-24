@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { homedir } from "node:os"
 
-import type { ProviderName, SessionSource } from "@/lib/pi-ingestion/types"
+import type { ProviderName, SessionSource } from "./types"
 
 type PiSessionHeader = {
   type: string

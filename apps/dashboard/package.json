@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",
+    "@workspace/agent-ingestion": "workspace:*",
     "@workspace/ui": "workspace:*",
     "lucide-react": "^1.8.0",
     "motion": "^12.38.0",
