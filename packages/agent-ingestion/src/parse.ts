@@ -111,6 +111,7 @@ function parseObservedUsageFromValues(values: {
   cacheWrite?: number
   totalTokens?: number
   model?: string
+  responseId?: string
   speed?: "standard" | "fast"
   cost?: {
     input?: number
@@ -130,6 +131,7 @@ function parseObservedUsageFromValues(values: {
     values.model,
     { input, output, cacheRead, cacheWrite },
     values.speed,
+    values.responseId,
   )
 
   const inputCostValue = values.cost?.input
@@ -343,6 +345,7 @@ export function parsePiSessionContent(source: SessionSource, content: string): S
         cacheWrite: entry.message.usage.cacheWrite,
         totalTokens: entry.message.usage.totalTokens,
         model: entry.message.model,
+        responseId: entry.message.responseId,
         cost: entry.message.usage.cost,
       })
       if (usage.totalTokens === 0) continue
