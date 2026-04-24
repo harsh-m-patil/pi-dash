@@ -1,4 +1,3 @@
-import { basename } from "node:path"
 import Link from "next/link"
 import {
   AlertTriangle,
@@ -14,6 +13,8 @@ import {
 
 import { DailySpendChart, DailyTokenMixChart, ProjectSpendChart } from "@/components/dashboard-charts"
 import { DateRangeFilter } from "@/components/date-range-filter"
+import { ProjectsDataTable, type ProjectTableRow } from "@/components/projects-data-table"
+import { SessionsDataTable, type SessionTableRow } from "@/components/sessions-data-table"
 import { ingestAgentSessions, type ProviderName } from "@/lib/pi-ingestion"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -32,14 +33,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@workspace/ui/components/empty"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@workspace/ui/components/table"
 
 export const dynamic = "force-dynamic"
 
@@ -257,8 +250,6 @@ export default async function Page({ searchParams }: PageProps) {
     { value: "claude", label: "Claude" },
   ]
 
-  const providerLabel = selectedProviderFilter === "all" ? "All" : selectedProviderFilter
-
   const sessions = result.projects
     .flatMap((project) =>
       project.sessions.map((session) => ({
@@ -266,7 +257,6 @@ export default async function Page({ searchParams }: PageProps) {
         provider: session.provider,
         projectId: project.id,
         projectLabel: project.label,
-        startedAt: session.startedAt,
         endedAt: session.endedAt,
         turns: session.turns.length,
         invocations: session.turns.reduce((sum, turn) => sum + turn.invocations.length, 0),
@@ -280,6 +270,20 @@ export default async function Page({ searchParams }: PageProps) {
     )
     .sort((a, b) => b.endedAt.localeCompare(a.endedAt))
 
+  const recentSessionRows: SessionTableRow[] = sessions.map((session) => ({
+    id: session.id,
+    provider: session.provider,
+    projectId: session.projectId,
+    projectName: session.projectLabel || session.projectId,
+    turns: session.turns,
+    invocations: session.invocations,
+    tools: session.tools,
+    totalTokens: session.totalTokens,
+    cost: session.cost,
+    endedAt: session.endedAt,
+    endedAtLabel: formatDate(session.endedAt),
+  }))
+
   const providerSessionCounts = sessions.reduce(
     (acc, session) => {
       acc[session.provider] = (acc[session.provider] ?? 0) + 1
@@ -288,7 +292,7 @@ export default async function Page({ searchParams }: PageProps) {
     {} as Record<string, number>,
   )
 
-  const projectRows = result.projects.map((project) => {
+  const projectRows: ProjectTableRow[] = result.projects.map((project) => {
     const turns = project.sessions.reduce((sum, session) => sum + session.turns.length, 0)
     const invocations = project.sessions.reduce(
       (sum, session) => sum + session.turns.reduce((inner, turn) => inner + turn.invocations.length, 0),
@@ -405,8 +409,6 @@ export default async function Page({ searchParams }: PageProps) {
     sessions: project.sessions,
   }))
 
-  const windowLabel = `${formatDateOnly(result.window.from)} → ${formatDateOnly(result.window.to)}`
-  const selectedWindowLabel = customWindow ? "Custom dates" : `Last ${selectedDays} days`
   const chartWindowLabel = customWindow ? "custom range" : `last ${selectedDays} days`
   const overallCacheRate = cacheRate(result.summary.observed.input, result.summary.observed.cacheRead)
 
@@ -417,9 +419,6 @@ export default async function Page({ searchParams }: PageProps) {
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">Agent Dashboard</Badge>
-              <Badge variant="secondary">Window: {selectedWindowLabel}</Badge>
-              <Badge variant="outline">Provider: {providerLabel}</Badge>
-              <Badge variant="outline">{windowLabel}</Badge>
             </div>
             <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
               Local-first session analytics
@@ -573,47 +572,7 @@ export default async function Page({ searchParams }: PageProps) {
                   <CardDescription>Canonical project ID is full cwd, label is basename</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Project</TableHead>
-                        <TableHead className="text-right">Sessions</TableHead>
-                        <TableHead className="text-right">Turns</TableHead>
-                        <TableHead className="text-right">Invocations</TableHead>
-                        <TableHead className="text-right">Tokens</TableHead>
-                        <TableHead className="text-right">Cache</TableHead>
-                        <TableHead className="text-right">Cost</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {projectRows.map((project) => (
-                        <TableRow key={project.id}>
-                          <TableCell>
-                            <div className="min-w-0">
-                              <p className="max-w-[280px] truncate font-medium" title={project.id}>
-                                {project.label}
-                              </p>
-                              <p className="max-w-[320px] truncate text-xs text-muted-foreground" title={project.id}>
-                                {project.id}
-                              </p>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right font-mono">{project.sessions}</TableCell>
-                          <TableCell className="text-right font-mono">{project.turns}</TableCell>
-                          <TableCell className="text-right font-mono">{project.invocations}</TableCell>
-                          <TableCell className="text-right font-mono">
-                            {formatNumber(project.tokens)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {project.cacheRate.toFixed(1)}%
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {formatCurrency(project.cost)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <ProjectsDataTable data={projectRows} />
                 </CardContent>
               </Card>
 
@@ -655,46 +614,7 @@ export default async function Page({ searchParams }: PageProps) {
                   <CardDescription>Most recently completed sessions in the selected time window</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Session</TableHead>
-                        <TableHead>Project</TableHead>
-                        <TableHead>Provider</TableHead>
-                        <TableHead className="text-right">Turns</TableHead>
-                        <TableHead className="text-right">Invocations</TableHead>
-                        <TableHead className="text-right">Tools</TableHead>
-                        <TableHead className="text-right">Tokens</TableHead>
-                        <TableHead className="text-right">Cost</TableHead>
-                        <TableHead className="text-right">Ended</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {sessions.slice(0, 15).map((session) => (
-                        <TableRow key={`${session.projectId}:${session.id}:${session.endedAt}`}>
-                          <TableCell className="font-mono text-xs">{session.id.slice(0, 12)}…</TableCell>
-                          <TableCell>{session.projectLabel || basename(session.projectId)}</TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className="capitalize">
-                              {session.provider}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right font-mono">{session.turns}</TableCell>
-                          <TableCell className="text-right font-mono">{session.invocations}</TableCell>
-                          <TableCell className="text-right font-mono">{session.tools}</TableCell>
-                          <TableCell className="text-right font-mono">
-                            {formatNumber(session.totalTokens)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {formatCurrency(session.cost)}
-                          </TableCell>
-                          <TableCell className="text-right text-xs text-muted-foreground">
-                            {formatDate(session.endedAt)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <SessionsDataTable data={recentSessionRows} />
                 </CardContent>
               </Card>
             </section>
