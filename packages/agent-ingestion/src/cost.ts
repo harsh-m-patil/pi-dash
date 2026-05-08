@@ -15,7 +15,9 @@ export type CostBreakdown = {
 }
 
 function isBedrockResponseId(responseId?: string): boolean {
-  return typeof responseId === "string" && responseId.toLowerCase().includes("bedrock")
+  if (typeof responseId !== "string") return false
+  const normalized = responseId.toLowerCase()
+  return normalized.includes("bedrock") || normalized.includes("bdrk")
 }
 
 const BEDROCK_PRICING: Record<string, ModelPricing> = {

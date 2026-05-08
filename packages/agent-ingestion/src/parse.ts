@@ -693,6 +693,7 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
       cacheRead: msg.usage.usage?.cache_read_input_tokens,
       cacheWrite: msg.usage.usage?.cache_creation_input_tokens,
       model: msg.model,
+      responseId: msg.messageId,
       speed: msg.usage.usage?.speed,
     })
     if (usage.totalTokens === 0) continue
@@ -726,6 +727,7 @@ export function parseClaudeSessionContent(source: SessionSource, content: string
       timestamp: msg.lastTimestamp,
       provider: "claude",
       model: msg.model,
+      responseId: msg.messageId,
       stopReason: msg.stopReason,
       usage,
       toolCallIds,
