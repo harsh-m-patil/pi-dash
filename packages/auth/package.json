@@ -1,0 +1,24 @@
+{
+  "name": "@agents-dashboard/auth",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@agents-dashboard/db": "workspace:*",
+    "@agents-dashboard/env": "workspace:*",
+    "better-auth": "catalog:",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@agents-dashboard/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

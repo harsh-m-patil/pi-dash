@@ -1,0 +1,6 @@
+{
+  "extends": "@agents-dashboard/config/tsconfig.base.json",
+  "compilerOptions": {
+    "strictNullChecks": true
+  }
+}
